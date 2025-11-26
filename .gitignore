@@ -1,0 +1,19 @@
+target/
+node_modules/
+.DS_Store
+dist/
+coverage/
+tmp/
+.yarn/
+.env
+*.log
+*.tsbuildinfo
+
+# Anchor / Solana
+.solana/
+keys/
+*.so
+
+# Rust
+Cargo.lock
+**/*.rs.bk
