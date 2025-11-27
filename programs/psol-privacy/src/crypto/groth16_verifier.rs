@@ -1,25 +1,29 @@
 //! Groth16 Zero-Knowledge Proof Verifier
 //!
-//! # PHASE 2 STATUS: FAIL-CLOSED SKELETON
+//! # Phase 3 Implementation
 //!
-//! This verifier currently ALWAYS REJECTS proofs. This is intentional
-//! security behavior - no withdrawals are possible until real Groth16
-//! verification is implemented in Phase 3.
+//! This module implements Groth16 proof verification for the pSol privacy pool.
+//! It uses Solana's alt_bn128 precompiles for efficient pairing operations.
 //!
-//! ## Why Fail-Closed?
-//! A placeholder verifier that accepts proofs would allow fund theft.
-//! By always rejecting, we ensure security even with incomplete code.
-//!
-//! ## Phase 3 Implementation
-//! Implement the Groth16 verification equation:
+//! ## Verification Equation
+//! The Groth16 verification equation is:
 //! ```text
-//! e(A, B) = e(α, β) · e(Σ public_inputs[i] · IC[i], γ) · e(C, δ)
+//! e(A, B) = e(α, β) · e(vk_x, γ) · e(C, δ)
 //! ```
 //!
-//! Using Solana's alt_bn128 precompiles:
-//! - `sol_alt_bn128_g1_add` - G1 point addition
-//! - `sol_alt_bn128_g1_multiply` - G1 scalar multiplication
-//! - `sol_alt_bn128_pairing` - Pairing check
+//! Which can be rewritten as a single pairing check:
+//! ```text
+//! e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
+//! ```
+//!
+//! Where:
+//! - (A, B, C) are the proof elements
+//! - (α, β, γ, δ) are from the verification key
+//! - vk_x = IC[0] + Σ(public_input[i] · IC[i+1])
+//!
+//! ## Dev Mode
+//! When compiled with the `dev-mode` feature, proof verification can be
+//! bypassed for testing. This feature MUST NEVER be enabled in production.
 //!
 //! ## References
 //! - Groth16 paper: https://eprint.iacr.org/2016/260
@@ -30,6 +34,11 @@ use anchor_lang::prelude::*;
 use crate::error::PrivacyError;
 use crate::state::verification_key::VerificationKey;
 
+use super::curve_utils::{
+    compute_vk_x, is_g1_identity, is_g2_identity, make_pairing_element,
+    negate_g1, validate_g1_point, validate_g2_point, verify_pairing,
+    G1Point, G2Point, PairingElement,
+};
 use super::public_inputs::ZkPublicInputs;
 
 // ============================================================================
@@ -46,16 +55,21 @@ pub const PROOF_DATA_LEN: usize = 256;
 ///
 /// A Groth16 proof consists of three curve points: (A, B, C)
 /// where A, C ∈ G1 and B ∈ G2.
+///
+/// ## Encoding
+/// All points are in uncompressed big-endian format:
+/// - G1 points: 64 bytes (32 bytes x, 32 bytes y)
+/// - G2 points: 128 bytes (64 bytes x, 64 bytes y)
 #[derive(Clone, Debug)]
 pub struct Groth16Proof {
     /// Point A ∈ G1 (uncompressed, 64 bytes)
-    pub a: [u8; 64],
+    pub a: G1Point,
     
     /// Point B ∈ G2 (uncompressed, 128 bytes)
-    pub b: [u8; 128],
+    pub b: G2Point,
     
     /// Point C ∈ G1 (uncompressed, 64 bytes)
-    pub c: [u8; 64],
+    pub c: G1Point,
 }
 
 impl Groth16Proof {
@@ -66,6 +80,13 @@ impl Groth16Proof {
     ///
     /// # Returns
     /// Parsed proof structure or error
+    ///
+    /// # Layout
+    /// ```text
+    /// [0..64]    - A (G1 point)
+    /// [64..192]  - B (G2 point)
+    /// [192..256] - C (G1 point)
+    /// ```
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         require!(
             data.len() == PROOF_DATA_LEN,
@@ -101,10 +122,12 @@ impl Groth16Proof {
 
 /// Verify a Groth16 zero-knowledge proof.
 ///
-/// # PHASE 2 STATUS: ALWAYS RETURNS ERROR
-///
-/// This function currently ALWAYS returns `Err(PrivacyError::CryptoNotImplemented)`.
-/// This is intentional - no proofs can be verified until Phase 3.
+/// # Algorithm
+/// 1. Parse and validate proof points
+/// 2. Validate verification key
+/// 3. Encode public inputs as field elements
+/// 4. Compute vk_x = IC[0] + Σ(public_input[i] · IC[i+1])
+/// 5. Compute pairing: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
 ///
 /// # Arguments
 /// * `proof_bytes` - Raw proof data (256 bytes)
@@ -112,130 +135,159 @@ impl Groth16Proof {
 /// * `public_inputs` - Public inputs to the circuit
 ///
 /// # Returns
-/// * `Ok(true)` - Proof is valid (NOT CURRENTLY POSSIBLE)
+/// * `Ok(true)` - Proof is valid
 /// * `Err(...)` - Proof is invalid or verification failed
 ///
-/// # Phase 3 Implementation Notes
+/// # Security
+/// - This function is cryptographically critical
+/// - Invalid proofs MUST always be rejected
+/// - The verification key must come from a trusted setup
 ///
-/// The Groth16 verification equation is:
-/// ```text
-/// e(A, B) = e(α, β) · e(vk_x, γ) · e(C, δ)
-/// ```
-///
-/// Where `vk_x = IC[0] + Σ(public_input[i] · IC[i+1])`
-///
-/// Steps:
-/// 1. Parse and validate proof points (A ∈ G1, B ∈ G2, C ∈ G1)
-/// 2. Validate VK points
-/// 3. Encode public inputs as field elements
-/// 4. Compute vk_x = IC[0] + Σ(public_input[i] · IC[i+1])
-/// 5. Compute pairing: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
-/// 6. Return true if pairing check passes
+/// # Dev Mode
+/// When compiled with `dev-mode` feature, returns Ok(true) without
+/// performing cryptographic verification. NEVER use in production.
 pub fn verify_groth16_proof(
     proof_bytes: &[u8],
     vk: &VerificationKey,
     public_inputs: &ZkPublicInputs,
 ) -> Result<bool> {
+    // Dev mode bypass (ONLY for testing)
+    #[cfg(feature = "dev-mode")]
+    {
+        msg!("⚠️  DEV MODE: Proof verification bypassed!");
+        msg!("⚠️  This build is NOT safe for production!");
+        
+        // Still validate inputs to catch obvious errors
+        let _ = Groth16Proof::from_bytes(proof_bytes)?;
+        validate_verification_key(vk)?;
+        public_inputs.validate()?;
+        
+        return Ok(true);
+    }
+
+    // Production verification
+    #[cfg(not(feature = "dev-mode"))]
+    {
+        verify_groth16_proof_impl(proof_bytes, vk, public_inputs)
+    }
+}
+
+/// Internal implementation of Groth16 verification.
+///
+/// This function performs the full cryptographic verification.
+#[cfg(not(feature = "dev-mode"))]
+fn verify_groth16_proof_impl(
+    proof_bytes: &[u8],
+    vk: &VerificationKey,
+    public_inputs: &ZkPublicInputs,
+) -> Result<bool> {
+    msg!("Groth16 verification starting...");
+
     // Step 1: Parse proof structure
     let proof = Groth16Proof::from_bytes(proof_bytes)?;
+    msg!("Proof parsed successfully");
 
-    // Step 2: Validate proof points are non-zero
+    // Step 2: Validate proof points are on curve and not identity
     validate_proof_points(&proof)?;
+    msg!("Proof points validated");
 
     // Step 3: Validate VK is properly configured
     validate_verification_key(vk)?;
+    msg!("Verification key validated");
 
-    // Step 4: Validate public inputs
-    validate_public_inputs(public_inputs)?;
+    // Step 4: Validate and encode public inputs
+    public_inputs.validate()?;
+    let encoded_inputs = public_inputs.to_field_elements();
+    msg!("Public inputs encoded: {} elements", encoded_inputs.len());
 
-    // Step 5: Encode public inputs for circuit
-    let _encoded_inputs = public_inputs.to_field_elements();
+    // Step 5: Compute vk_x = IC[0] + Σ(input[i] * IC[i+1])
+    let vk_x = compute_vk_x(&vk.ic, &encoded_inputs)?;
+    msg!("vk_x computed");
 
-    // ========================================================================
-    // PHASE 3 TODO: Implement actual Groth16 verification
-    // ========================================================================
-    //
-    // The verification equation is:
-    //   e(A, B) = e(α, β) · e(vk_x, γ) · e(C, δ)
-    //
-    // Which can be rewritten as a single pairing check:
-    //   e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
-    //
-    // Implementation using Solana's alt_bn128 syscalls:
-    //
-    // 1. Compute vk_x = IC[0] + Σ(input[i] * IC[i+1])
-    //    - Use sol_alt_bn128_g1_multiply for scalar mult
-    //    - Use sol_alt_bn128_g1_add for accumulation
-    //
-    // 2. Negate A (negate y-coordinate for BN254)
-    //
-    // 3. Construct pairing input:
-    //    [(-A, B), (α, β), (vk_x, γ), (C, δ)]
-    //
-    // 4. Call sol_alt_bn128_pairing
-    //    - Returns true if product of pairings equals 1
-    //
-    // Example code structure:
-    // ```
-    // let neg_a = negate_g1(&proof.a)?;
-    // let vk_x = compute_vk_x(&vk.ic, &encoded_inputs)?;
-    //
-    // let pairing_input = [
-    //     (neg_a, proof.b),
-    //     (vk.alpha_g1, vk.beta_g2),
-    //     (vk_x, vk.gamma_g2),
-    //     (proof.c, vk.delta_g2),
-    // ];
-    //
-    // let result = sol_alt_bn128_pairing(&pairing_input)?;
-    // ```
-    // ========================================================================
+    // Step 6: Negate A for pairing equation
+    let neg_a = negate_g1(&proof.a)?;
+    msg!("A negated");
 
-    // Log warning for debugging
-    msg!("WARNING: Groth16 verification not implemented");
-    msg!("Proof structure valid, but pairing check not performed");
-    msg!("This withdrawal WILL BE REJECTED");
+    // Step 7: Construct pairing elements
+    // Verification equation: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
+    let pairing_elements: [PairingElement; 4] = [
+        make_pairing_element(&neg_a, &proof.b),           // e(-A, B)
+        make_pairing_element(&vk.alpha_g1, &vk.beta_g2),  // e(α, β)
+        make_pairing_element(&vk_x, &vk.gamma_g2),        // e(vk_x, γ)
+        make_pairing_element(&proof.c, &vk.delta_g2),     // e(C, δ)
+    ];
 
-    // FAIL-CLOSED: Always return error until real verification is implemented
-    Err(error!(PrivacyError::CryptoNotImplemented))
+    // Step 8: Verify pairing
+    msg!("Performing pairing check...");
+    let result = verify_pairing(&pairing_elements)?;
+
+    if result {
+        msg!("✓ Proof verified successfully");
+    } else {
+        msg!("✗ Proof verification failed");
+    }
+
+    Ok(result)
 }
 
 // ============================================================================
 // VALIDATION HELPERS
 // ============================================================================
 
-/// Validate that proof points are not the identity element.
+/// Validate that proof points are well-formed.
+///
+/// Checks:
+/// 1. A ∈ G1 is not identity and on curve
+/// 2. B ∈ G2 is not identity and valid
+/// 3. C ∈ G1 is not identity and on curve
 fn validate_proof_points(proof: &Groth16Proof) -> Result<()> {
-    // Check A is not zero (identity in G1)
+    // Check A is not identity
     require!(
         !is_g1_identity(&proof.a),
         PrivacyError::InvalidProof
     );
+    
+    // Validate A is on curve
+    validate_g1_point(&proof.a)?;
 
-    // Check C is not zero (identity in G1)
-    require!(
-        !is_g1_identity(&proof.c),
-        PrivacyError::InvalidProof
-    );
-
-    // Check B is not zero (identity in G2)
+    // Check B is not identity
     require!(
         !is_g2_identity(&proof.b),
         PrivacyError::InvalidProof
     );
+    
+    // Validate B (basic check)
+    validate_g2_point(&proof.b)?;
 
-    // TODO [PHASE 3]: Validate points are actually on the curve
-    // This requires implementing curve arithmetic
+    // Check C is not identity
+    require!(
+        !is_g1_identity(&proof.c),
+        PrivacyError::InvalidProof
+    );
+    
+    // Validate C is on curve
+    validate_g1_point(&proof.c)?;
 
     Ok(())
 }
 
-/// Validate verification key structure.
+/// Validate verification key structure and values.
+///
+/// Checks:
+/// 1. Sufficient IC points for public inputs
+/// 2. Alpha is not identity
+/// 3. All VK points are valid (basic validation)
 fn validate_verification_key(vk: &VerificationKey) -> Result<()> {
     // Must have at least 2 IC points (1 base + 1 for at least 1 public input)
     require!(
         vk.ic.len() >= 2,
         PrivacyError::VerificationKeyNotSet
+    );
+
+    // For withdrawal circuit with 6 public inputs, we need 7 IC points
+    require!(
+        vk.ic.len() == ZkPublicInputs::COUNT + 1,
+        PrivacyError::InvalidPublicInputs
     );
 
     // Alpha must not be identity
@@ -244,70 +296,24 @@ fn validate_verification_key(vk: &VerificationKey) -> Result<()> {
         PrivacyError::VerificationKeyNotSet
     );
 
-    // TODO [PHASE 3]: Validate all VK points are on curve
+    // Validate alpha is on curve
+    validate_g1_point(&vk.alpha_g1)?;
+
+    // Validate G2 points
+    validate_g2_point(&vk.beta_g2)?;
+    validate_g2_point(&vk.gamma_g2)?;
+    validate_g2_point(&vk.delta_g2)?;
+
+    // Validate each IC point
+    for (i, ic_point) in vk.ic.iter().enumerate() {
+        if is_g1_identity(ic_point) && i == 0 {
+            // IC[0] can technically be identity, but it's unusual
+            msg!("Warning: IC[0] is identity point");
+        }
+        validate_g1_point(ic_point)?;
+    }
 
     Ok(())
-}
-
-/// Validate public inputs structure.
-fn validate_public_inputs(inputs: &ZkPublicInputs) -> Result<()> {
-    // Merkle root cannot be zero
-    require!(
-        !inputs.merkle_root.iter().all(|&b| b == 0),
-        PrivacyError::InvalidMerkleRoot
-    );
-
-    // Nullifier cannot be zero
-    require!(
-        !inputs.nullifier_hash.iter().all(|&b| b == 0),
-        PrivacyError::InvalidNullifier
-    );
-
-    // Amount must be positive
-    require!(
-        inputs.amount > 0,
-        PrivacyError::InvalidAmount
-    );
-
-    // Fee cannot exceed amount
-    require!(
-        inputs.relayer_fee <= inputs.amount,
-        PrivacyError::RelayerFeeExceedsAmount
-    );
-
-    Ok(())
-}
-
-/// Check if G1 point is the identity (all zeros in this representation).
-fn is_g1_identity(point: &[u8; 64]) -> bool {
-    point.iter().all(|&b| b == 0)
-}
-
-/// Check if G2 point is the identity (all zeros in this representation).
-fn is_g2_identity(point: &[u8; 128]) -> bool {
-    point.iter().all(|&b| b == 0)
-}
-
-// ============================================================================
-// PHASE 3 PLACEHOLDER FUNCTIONS
-// ============================================================================
-
-/// Negate a G1 point (negate y-coordinate).
-/// Used in pairing verification equation.
-#[allow(dead_code)]
-fn negate_g1(_point: &[u8; 64]) -> Result<[u8; 64]> {
-    // TODO [PHASE 3]: Implement G1 negation
-    // For BN254, negate y-coordinate: (x, -y mod p)
-    Err(error!(PrivacyError::CryptoNotImplemented))
-}
-
-/// Compute vk_x = IC[0] + Σ(input[i] * IC[i+1]).
-#[allow(dead_code)]
-fn compute_vk_x(_ic: &[[u8; 64]], _inputs: &[[u8; 32]]) -> Result<[u8; 64]> {
-    // TODO [PHASE 3]: Implement using alt_bn128 syscalls
-    // 1. Start with acc = IC[0]
-    // 2. For each input[i]: acc = acc + (input[i] * IC[i+1])
-    Err(error!(PrivacyError::CryptoNotImplemented))
 }
 
 // ============================================================================
@@ -344,4 +350,15 @@ mod tests {
         
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_proof_length_too_long() {
+        let data = [1u8; 300]; // Too long
+        let result = Groth16Proof::from_bytes(&data);
+        
+        assert!(result.is_err());
+    }
+
+    // Note: Full verification tests require valid VK and proofs from a circuit
+    // Those are typically done in integration tests with snarkjs or similar
 }

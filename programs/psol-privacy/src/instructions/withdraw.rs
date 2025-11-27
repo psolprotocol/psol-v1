@@ -1,11 +1,11 @@
 //! Withdraw Instruction
 //!
-//! Withdraws tokens from the privacy pool using a zero-knowledge proof.
+//! Withdraws tokens from the privacy pool using a Groth16 zero-knowledge proof.
 //!
-//! # PHASE 2 STATUS: FAIL-CLOSED
+//! # Phase 3 Implementation
 //!
-//! This instruction currently ALWAYS FAILS because Groth16 verification
-//! is not yet implemented. This is intentional security behavior.
+//! Full Groth16 verification is now implemented using Solana's alt_bn128 precompiles.
+//! In production builds, all proofs are cryptographically verified.
 //!
 //! # Architecture
 //! 1. User generates ZK proof off-chain proving:
@@ -14,13 +14,13 @@
 //!    - The nullifier_hash is correctly derived
 //!
 //! 2. User (or relayer) submits withdrawal transaction with:
-//!    - Proof data (256 bytes)
+//!    - Proof data (256 bytes: A || B || C curve points)
 //!    - Public inputs (merkle_root, nullifier_hash, recipient, amount, relayer, fee)
 //!
 //! 3. On-chain verification:
 //!    - Check merkle_root is in recent history
 //!    - Check nullifier not already spent (via PDA existence)
-//!    - Verify ZK proof (CURRENTLY FAILS - Phase 3)
+//!    - Verify Groth16 proof using pairing check
 //!    - Create SpentNullifier PDA to mark as spent
 //!    - Transfer tokens to recipient
 //!
@@ -29,6 +29,10 @@
 //! - User's address never appears on-chain
 //! - Relayer receives fee from withdrawal amount
 //! - Relayer pays transaction fees
+//!
+//! # Dev Mode
+//! When built with `--features dev-mode`, proof verification is bypassed.
+//! This is ONLY for testing - NEVER use in production!
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
@@ -130,19 +134,28 @@ pub struct Withdraw<'info> {
 
 /// Handler for withdraw instruction.
 ///
-/// # PHASE 2 STATUS: ALWAYS FAILS
+/// Withdraws tokens from the privacy pool using a Groth16 ZK proof.
 ///
-/// This function performs all validation but will fail at proof verification
-/// because Groth16 is not yet implemented.
+/// # Verification Flow
+/// 1. Validate pool is not paused and VK is configured
+/// 2. Validate amount, fee, and vault balance
+/// 3. Verify merkle_root is in recent history
+/// 4. Verify Groth16 proof (or bypass in dev-mode)
+/// 5. Create SpentNullifier PDA (marks as spent)
+/// 6. Transfer tokens to recipient and relayer
 ///
 /// # Arguments
-/// * `proof_data` - Serialized Groth16 proof (256 bytes)
+/// * `proof_data` - Serialized Groth16 proof (256 bytes: A || B || C)
 /// * `merkle_root` - Root to prove membership against
 /// * `nullifier_hash` - Hash of nullifier (prevents double-spend)
 /// * `recipient` - Address to receive withdrawn tokens
 /// * `amount` - Amount to withdraw (before fee)
 /// * `relayer` - Relayer address (receives fee)
 /// * `relayer_fee` - Fee paid to relayer
+///
+/// # Security
+/// - Proof verification is cryptographically enforced in production
+/// - In dev-mode builds, proof verification is bypassed for testing
 #[allow(clippy::too_many_arguments)]
 pub fn handler(
     ctx: Context<Withdraw>,
@@ -207,12 +220,12 @@ pub fn handler(
     // Get verification key
     let vk: VerificationKey = verification_key.into();
 
-    // Verify proof
-    // PHASE 2: This ALWAYS returns Err(CryptoNotImplemented)
+    // Verify Groth16 proof
+    // In production: performs full pairing verification
+    // In dev-mode: bypasses proof check (for testing only!)
     let proof_valid = verify_groth16_proof(&proof_data, &vk, &public_inputs)?;
 
-    // This line is technically unreachable in Phase 2
-    // (verify_groth16_proof always returns Err)
+    // Reject if proof is invalid
     require!(proof_valid, PrivacyError::InvalidProof);
 
     // ========== STATE UPDATES (only reached if proof valid) ==========

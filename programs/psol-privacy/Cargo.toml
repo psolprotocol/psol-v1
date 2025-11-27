@@ -1,6 +1,6 @@
 [package]
 name = "psol-privacy"
-version = "0.2.0"
+version = "0.3.0"
 description = "pSol Privacy Pool - ZK-based private transactions on Solana"
 edition = "2021"
 
@@ -14,13 +14,21 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
-# Future: enable when real crypto is ready
-# production = []
+# Dev mode: allows bypassing proof verification for testing
+# NEVER enable in production builds!
+dev-mode = []
 
 [dependencies]
 anchor-lang = "0.30.1"
 anchor-spl = "0.30.1"
 solana-program = "1.18"
+# Poseidon hash function optimized for Solana
+light-poseidon = "0.2.0"
+# For big integer arithmetic in curve operations
+num-bigint = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
 
 [dev-dependencies]
-# For testing only
+# For property-based testing
+proptest = "1.4"
+rand = "0.8"
