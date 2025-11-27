@@ -17,3 +17,5 @@ keys/
 # Rust
 Cargo.lock
 **/*.rs.bk
+program-keypair-backup.json
+target/deploy/*-keypair.json

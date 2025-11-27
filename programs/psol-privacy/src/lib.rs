@@ -21,7 +21,7 @@ pub mod state;
 use instructions::*;
 
 // IMPORTANT: Replace with actual program ID after deployment
-declare_id!("Ex714yinMJgdXThcw9G3pxCeuVxZrHVPuYhq6p1chsiE");
+declare_id!("ERzD2bR2n64b6z2i9cR1kQeEM2tfNUEKJrKLPET4wUb5");
 
 #[program]
 pub mod psol_privacy {
