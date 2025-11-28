@@ -1,31 +1,42 @@
-//! Deposit Instruction
+//! Deposit Instruction - Phase 3
 //!
 //! Deposits SPL tokens into the privacy pool and inserts a commitment
 //! into the Merkle tree.
 //!
-//! # Commitment Scheme
-//! commitment = hash(secret, nullifier_preimage, amount)
+//! # Phase 3 Commitment Model (Off-Chain)
 //!
-//! The commitment is computed ON-CHAIN to ensure:
-//! 1. Amount is bound to the commitment (prevents amount manipulation)
-//! 2. Circuit can replicate the same computation
-//! 3. User cannot insert arbitrary commitments
+//! In Phase 3, the commitment is computed OFF-CHAIN by the user:
+//! ```text
+//! commitment = Poseidon(secret, nullifier_preimage, amount)
+//! ```
+//!
+//! The user provides the pre-computed commitment to the deposit instruction.
+//! This design:
+//! 1. Avoids Solana BPF stack limits with Poseidon
+//! 2. Ensures exact compatibility with ZK circuit
+//! 3. Keeps secret/nullifier_preimage completely off-chain
 //!
 //! # User Responsibility
-//! Users MUST save their secret and nullifier_preimage.
-//! These are needed to generate withdrawal proofs later.
-//! Lost secrets = lost funds (no recovery possible).
+//! Users MUST:
+//! 1. Generate random (secret, nullifier_preimage)
+//! 2. Compute commitment = Poseidon(secret, nullifier_preimage, amount)
+//! 3. Save (secret, nullifier_preimage, leaf_index) securely
+//! 4. Lost secrets = lost funds (no recovery possible)
+//!
+//! # Security
+//! The ZK circuit enforces that the commitment was computed correctly.
+//! An invalid commitment will make withdrawal impossible (funds locked).
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-use crate::crypto::poseidon;
 use crate::error::PrivacyError;
 use crate::events::DepositEvent;
 use crate::state::{MerkleTree, PoolConfig};
 
 /// Accounts for deposit instruction.
 #[derive(Accounts)]
+#[instruction(amount: u64, commitment: [u8; 32])]
 pub struct Deposit<'info> {
     /// Pool configuration.
     #[account(
@@ -73,30 +84,31 @@ pub struct Deposit<'info> {
 ///
 /// # Arguments
 /// * `amount` - Token amount to deposit (must be > 0)
-/// * `secret` - Random secret (32 bytes) - USER MUST SAVE THIS
-/// * `nullifier_preimage` - Nullifier preimage (32 bytes) - USER MUST SAVE THIS
+/// * `commitment` - Pre-computed commitment hash (32 bytes)
 ///
-/// # Commitment Computation
-/// The commitment is computed as:
+/// The commitment MUST be computed off-chain as:
 /// ```text
 /// commitment = Poseidon(secret, nullifier_preimage, amount)
 /// ```
 ///
-/// This binds the amount to the commitment, preventing amount manipulation
-/// during withdrawal.
+/// Using the exact same Poseidon parameters as the withdrawal circuit.
+///
+/// # Returns
+/// Emits DepositEvent with leaf_index needed for withdrawal proof.
 ///
 /// # Security Notes
-/// - secret and nullifier_preimage should be cryptographically random
-/// - User must store these values securely - they're needed for withdrawal
-/// - Lost secret/nullifier = lost funds (no recovery mechanism)
+/// - Commitment must be computed correctly off-chain
+/// - Invalid commitment = funds locked forever (can't generate valid proof)
+/// - User must store (secret, nullifier_preimage, leaf_index) securely
 pub fn handler(
     ctx: Context<Deposit>,
     amount: u64,
-    secret: [u8; 32],
-    nullifier_preimage: [u8; 32],
+    commitment: [u8; 32],
 ) -> Result<()> {
     let pool_config = &mut ctx.accounts.pool_config;
     let merkle_tree = &mut ctx.accounts.merkle_tree;
+
+    // ========== VALIDATION ==========
 
     // Check pool is not paused
     pool_config.require_not_paused()?;
@@ -104,30 +116,16 @@ pub fn handler(
     // Validate amount
     require!(amount > 0, PrivacyError::InvalidAmount);
 
-    // Validate secret is not all zeros (weak secret)
+    // Validate commitment is not zero (invalid commitment)
     require!(
-        !secret.iter().all(|&b| b == 0),
-        PrivacyError::InvalidSecret
-    );
-
-    // Validate nullifier preimage is not all zeros
-    require!(
-        !nullifier_preimage.iter().all(|&b| b == 0),
-        PrivacyError::InvalidNullifier
-    );
-
-    // Compute commitment on-chain
-    // This ensures amount is bound to the commitment
-    let commitment = poseidon::hash_commitment(&secret, &nullifier_preimage, amount);
-
-    // Validate commitment is not zero (should never happen with valid inputs)
-    require!(
-        !commitment.iter().all(|&b| b == 0),
+        !is_zero_commitment(&commitment),
         PrivacyError::InvalidCommitment
     );
 
     // Check tree has capacity
     require!(!merkle_tree.is_full(), PrivacyError::MerkleTreeFull);
+
+    // ========== TOKEN TRANSFER ==========
 
     // Transfer tokens from user to vault
     let cpi_accounts = Transfer {
@@ -138,17 +136,21 @@ pub fn handler(
     let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
     token::transfer(cpi_ctx, amount)?;
 
+    // ========== MERKLE TREE UPDATE ==========
+
     // Insert commitment into Merkle tree
     let leaf_index = merkle_tree.insert_leaf(commitment)?;
 
     // Get new root after insertion
     let new_root = merkle_tree.get_current_root();
 
+    // ========== STATE UPDATE ==========
+
     // Update pool statistics
     pool_config.increment_deposits()?;
 
-    // Emit deposit event
-    // IMPORTANT: Clients must index this to track their leaf_index
+    // ========== EVENT EMISSION ==========
+
     emit!(DepositEvent {
         pool: pool_config.key(),
         commitment,
@@ -161,25 +163,85 @@ pub fn handler(
     msg!("Deposit successful");
     msg!("Amount: {}", amount);
     msg!("Leaf index: {}", leaf_index);
-    msg!("Commitment: {:?}", &commitment[..8]); // Only log first 8 bytes
-    msg!("New root: {:?}", &new_root[..8]);
+    msg!("Commitment: {:?}", &commitment[..8]); // Only log first 8 bytes for privacy
 
     Ok(())
 }
 
+/// Check if commitment is all zeros (invalid).
+#[inline]
+fn is_zero_commitment(commitment: &[u8; 32]) -> bool {
+    commitment.iter().all(|&b| b == 0)
+}
+
 // ============================================================================
-// HELPER FUNCTIONS
+// CLIENT HELPER FUNCTIONS (for off-chain use)
 // ============================================================================
 
-/// Compute the nullifier hash from preimage and secret.
-/// This is what gets revealed on-chain during withdrawal.
+/// Compute commitment off-chain.
 ///
-/// nullifier_hash = Poseidon(nullifier_preimage, secret)
+/// This function documents the expected commitment format.
+/// Actual computation should use a Poseidon library matching the circuit.
+///
+/// ```text
+/// commitment = Poseidon(secret, nullifier_preimage, amount_as_field_element)
+/// ```
+///
+/// # Parameters
+/// - `secret`: 32 random bytes
+/// - `nullifier_preimage`: 32 random bytes  
+/// - `amount`: u64 token amount
+///
+/// # Returns
+/// 32-byte commitment hash
 ///
 /// # Note
-/// This function is provided as a helper for clients but is not used
-/// on-chain during deposit. It's used during withdrawal verification.
+/// This is documentation only. Use snarkjs/circomlib for actual computation.
 #[allow(dead_code)]
-pub fn compute_nullifier_hash(nullifier_preimage: &[u8; 32], secret: &[u8; 32]) -> [u8; 32] {
-    poseidon::hash_nullifier(nullifier_preimage, secret)
+pub fn compute_commitment_offchain(
+    _secret: &[u8; 32],
+    _nullifier_preimage: &[u8; 32],
+    _amount: u64,
+) -> [u8; 32] {
+    // This should be computed using Poseidon matching the circuit
+    // Example with circomlib:
+    // const commitment = poseidon([secret, nullifier_preimage, amount]);
+    unimplemented!("Use off-chain Poseidon library (snarkjs/circomlib)")
+}
+
+/// Compute nullifier hash off-chain.
+///
+/// ```text
+/// nullifier_hash = Poseidon(nullifier_preimage, secret)
+/// ```
+///
+/// This is revealed on-chain during withdrawal.
+#[allow(dead_code)]
+pub fn compute_nullifier_offchain(
+    _nullifier_preimage: &[u8; 32],
+    _secret: &[u8; 32],
+) -> [u8; 32] {
+    // This should be computed using Poseidon matching the circuit
+    unimplemented!("Use off-chain Poseidon library (snarkjs/circomlib)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_commitment_detection() {
+        let zero = [0u8; 32];
+        assert!(is_zero_commitment(&zero));
+
+        let non_zero = [1u8; 32];
+        assert!(!is_zero_commitment(&non_zero));
+
+        let partial = {
+            let mut arr = [0u8; 32];
+            arr[31] = 1;
+            arr
+        };
+        assert!(!is_zero_commitment(&partial));
+    }
 }

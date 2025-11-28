@@ -1,11 +1,15 @@
-//! Initialize Pool Instruction - Phase 3 (Stack Optimized)
+//! Initialize Pool Instruction
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::error::PrivacyError;
 use crate::events::PoolInitialized;
-use crate::state::{MerkleTree, PoolConfig, VerificationKeyAccount};
+use crate::state::{
+    merkle_tree::{MerkleTree, MAX_TREE_DEPTH, MIN_ROOT_HISTORY_SIZE, MIN_TREE_DEPTH},
+    pool_config::PoolConfig,
+    verification_key::VerificationKeyAccount,
+};
 
 #[derive(Accounts)]
 #[instruction(tree_depth: u8, root_history_size: u16)]
@@ -52,8 +56,8 @@ pub struct InitializePool<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 }
 
 pub fn handler(
@@ -61,34 +65,41 @@ pub fn handler(
     tree_depth: u8,
     root_history_size: u16,
 ) -> Result<()> {
-    require!(tree_depth >= 4 && tree_depth <= 24, PrivacyError::InvalidTreeDepth);
-    require!(root_history_size >= 30, PrivacyError::InvalidRootHistorySize);
+    require!(
+        tree_depth >= MIN_TREE_DEPTH && tree_depth <= MAX_TREE_DEPTH,
+        PrivacyError::InvalidTreeDepth
+    );
+    require!(
+        root_history_size >= MIN_ROOT_HISTORY_SIZE,
+        PrivacyError::InvalidRootHistorySize
+    );
 
-    let keys = (
-        ctx.accounts.pool_config.key(),
-        ctx.accounts.vault.key(),
-        ctx.accounts.merkle_tree.key(),
-        ctx.accounts.verification_key.key(),
+    let pool_config = &mut ctx.accounts.pool_config;
+    let merkle_tree = &mut ctx.accounts.merkle_tree;
+    let verification_key = &mut ctx.accounts.verification_key;
+
+    pool_config.initialize(
         ctx.accounts.authority.key(),
         ctx.accounts.token_mint.key(),
+        ctx.accounts.vault.key(),
+        merkle_tree.key(),
+        verification_key.key(),
+        tree_depth,
+        ctx.bumps.pool_config,
     );
 
-    ctx.accounts.pool_config.initialize(
-        keys.4, keys.5, keys.1, keys.2, keys.3, tree_depth, ctx.bumps.pool_config,
-    );
-
-    ctx.accounts.merkle_tree.initialize(keys.0, tree_depth, root_history_size)?;
-    ctx.accounts.verification_key.initialize(keys.0, ctx.bumps.verification_key);
+    merkle_tree.initialize(pool_config.key(), tree_depth, root_history_size)?;
+    verification_key.initialize(pool_config.key(), ctx.bumps.verification_key);
 
     emit!(PoolInitialized {
-        pool: keys.0,
-        authority: keys.4,
-        token_mint: keys.5,
+        pool: pool_config.key(),
+        authority: ctx.accounts.authority.key(),
+        token_mint: ctx.accounts.token_mint.key(),
         tree_depth,
         root_history_size,
         timestamp: Clock::get()?.unix_timestamp,
     });
 
-    msg!("Pool initialized: {}", keys.0);
+    msg!("Privacy pool initialized");
     Ok(())
 }

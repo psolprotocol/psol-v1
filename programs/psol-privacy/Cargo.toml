@@ -1,8 +1,10 @@
 [package]
 name = "psol-privacy"
-version = "0.3.0"
-description = "pSol Privacy Pool - ZK-based private transactions on Solana"
+version = "1.0.0"
+description = "pSol Privacy Pool - Phase 3 Production Implementation"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/psolprotocol/psol-v1"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -14,7 +16,6 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
-dev-mode = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]

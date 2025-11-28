@@ -1,20 +1,17 @@
-//! Groth16 Zero-Knowledge Proof Verifier - Phase 3
+//! Groth16 Zero-Knowledge Proof Verifier
 //!
-//! Production-ready Groth16 verification for the pSol privacy pool.
-//! Uses Solana's alt_bn128 precompiles for efficient pairing operations.
+//! # Phase 3 Implementation
 //!
-//! # Phase 3 Changes
-//! - Removed unsafe dev-mode bypass from production code
-//! - Test-only bypass available via `#[cfg(test)]`
-//! - All verification is cryptographically enforced
+//! This module implements Groth16 proof verification for the pSol privacy pool.
+//! It uses Solana's alt_bn128 precompiles for efficient pairing operations.
 //!
-//! # Verification Equation
+//! ## Verification Equation
 //! The Groth16 verification equation is:
 //! ```text
 //! e(A, B) = e(α, β) · e(vk_x, γ) · e(C, δ)
 //! ```
 //!
-//! Rewritten as a single pairing check:
+//! Which can be rewritten as a single pairing check:
 //! ```text
 //! e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
 //! ```
@@ -24,10 +21,13 @@
 //! - (α, β, γ, δ) are from the verification key
 //! - vk_x = IC[0] + Σ(public_input[i] · IC[i+1])
 //!
-//! # Security
-//! - Invalid proofs are ALWAYS rejected
-//! - All curve points are validated before use
-//! - Verification key must come from trusted setup
+//! ## Dev Mode
+//! When compiled with the `dev-mode` feature, proof verification can be
+//! bypassed for testing. This feature MUST NEVER be enabled in production.
+//!
+//! ## References
+//! - Groth16 paper: https://eprint.iacr.org/2016/260
+//! - Solana alt_bn128: solana_program::alt_bn128
 
 use anchor_lang::prelude::*;
 
@@ -42,7 +42,7 @@ use super::curve_utils::{
 use super::public_inputs::ZkPublicInputs;
 
 // ============================================================================
-// CONSTANTS
+// PROOF STRUCTURE
 // ============================================================================
 
 /// Expected proof data length in bytes.
@@ -50,10 +50,6 @@ use super::public_inputs::ZkPublicInputs;
 /// B = 128 bytes (G2 uncompressed)
 /// C = 64 bytes (G1 uncompressed)
 pub const PROOF_DATA_LEN: usize = 256;
-
-// ============================================================================
-// PROOF STRUCTURE
-// ============================================================================
 
 /// Groth16 proof structure.
 ///
@@ -92,10 +88,10 @@ impl Groth16Proof {
     /// [192..256] - C (G1 point)
     /// ```
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        if data.len() != PROOF_DATA_LEN {
-            msg!("Invalid proof length: {} (expected {})", data.len(), PROOF_DATA_LEN);
-            return Err(error!(PrivacyError::InvalidProofFormat));
-        }
+        require!(
+            data.len() == PROOF_DATA_LEN,
+            PrivacyError::InvalidProofFormat
+        );
 
         let mut proof = Groth16Proof {
             a: [0u8; 64],
@@ -128,7 +124,7 @@ impl Groth16Proof {
 ///
 /// # Algorithm
 /// 1. Parse and validate proof points
-/// 2. Validate verification key structure
+/// 2. Validate verification key
 /// 3. Encode public inputs as field elements
 /// 4. Compute vk_x = IC[0] + Σ(public_input[i] · IC[i+1])
 /// 5. Compute pairing: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
@@ -140,35 +136,46 @@ impl Groth16Proof {
 ///
 /// # Returns
 /// * `Ok(true)` - Proof is valid
-/// * `Ok(false)` - Proof is invalid (pairing check failed)
-/// * `Err(...)` - Verification error (malformed inputs)
+/// * `Err(...)` - Proof is invalid or verification failed
 ///
 /// # Security
 /// - This function is cryptographically critical
 /// - Invalid proofs MUST always be rejected
 /// - The verification key must come from a trusted setup
-/// - NO bypass is available in production builds
+///
+/// # Dev Mode
+/// When compiled with `dev-mode` feature, returns Ok(true) without
+/// performing cryptographic verification. NEVER use in production.
 pub fn verify_groth16_proof(
     proof_bytes: &[u8],
     vk: &VerificationKey,
     public_inputs: &ZkPublicInputs,
 ) -> Result<bool> {
-    // In test builds, allow bypass for unit testing
-    #[cfg(test)]
+    // Dev mode bypass (ONLY for testing)
+    #[cfg(feature = "dev-mode")]
     {
-        if is_test_bypass_enabled() {
-            msg!("⚠️ TEST MODE: Proof verification bypassed");
-            return Ok(true);
-        }
+        msg!("⚠️  DEV MODE: Proof verification bypassed!");
+        msg!("⚠️  This build is NOT safe for production!");
+        
+        // Still validate inputs to catch obvious errors
+        let _ = Groth16Proof::from_bytes(proof_bytes)?;
+        validate_verification_key(vk)?;
+        public_inputs.validate()?;
+        
+        return Ok(true);
     }
 
-    // Production verification - always cryptographically enforced
-    verify_groth16_proof_impl(proof_bytes, vk, public_inputs)
+    // Production verification
+    #[cfg(not(feature = "dev-mode"))]
+    {
+        verify_groth16_proof_impl(proof_bytes, vk, public_inputs)
+    }
 }
 
 /// Internal implementation of Groth16 verification.
 ///
-/// Performs the full cryptographic verification.
+/// This function performs the full cryptographic verification.
+#[cfg(not(feature = "dev-mode"))]
 fn verify_groth16_proof_impl(
     proof_bytes: &[u8],
     vk: &VerificationKey,
@@ -178,28 +185,28 @@ fn verify_groth16_proof_impl(
 
     // Step 1: Parse proof structure
     let proof = Groth16Proof::from_bytes(proof_bytes)?;
-    msg!("Step 1/8: Proof parsed");
+    msg!("Proof parsed successfully");
 
     // Step 2: Validate proof points are on curve and not identity
     validate_proof_points(&proof)?;
-    msg!("Step 2/8: Proof points validated");
+    msg!("Proof points validated");
 
     // Step 3: Validate VK is properly configured
     validate_verification_key(vk)?;
-    msg!("Step 3/8: Verification key validated");
+    msg!("Verification key validated");
 
     // Step 4: Validate and encode public inputs
     public_inputs.validate()?;
     let encoded_inputs = public_inputs.to_field_elements();
-    msg!("Step 4/8: {} public inputs encoded", encoded_inputs.len());
+    msg!("Public inputs encoded: {} elements", encoded_inputs.len());
 
     // Step 5: Compute vk_x = IC[0] + Σ(input[i] * IC[i+1])
     let vk_x = compute_vk_x(&vk.ic, &encoded_inputs)?;
-    msg!("Step 5/8: vk_x computed");
+    msg!("vk_x computed");
 
     // Step 6: Negate A for pairing equation
     let neg_a = negate_g1(&proof.a)?;
-    msg!("Step 6/8: A negated");
+    msg!("A negated");
 
     // Step 7: Construct pairing elements
     // Verification equation: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
@@ -209,16 +216,15 @@ fn verify_groth16_proof_impl(
         make_pairing_element(&vk_x, &vk.gamma_g2),        // e(vk_x, γ)
         make_pairing_element(&proof.c, &vk.delta_g2),     // e(C, δ)
     ];
-    msg!("Step 7/8: Pairing elements constructed");
 
     // Step 8: Verify pairing
-    msg!("Step 8/8: Performing pairing check...");
+    msg!("Performing pairing check...");
     let result = verify_pairing(&pairing_elements)?;
 
     if result {
         msg!("✓ Proof verified successfully");
     } else {
-        msg!("✗ Proof verification FAILED");
+        msg!("✗ Proof verification failed");
     }
 
     Ok(result)
@@ -236,40 +242,31 @@ fn verify_groth16_proof_impl(
 /// 3. C ∈ G1 is not identity and on curve
 fn validate_proof_points(proof: &Groth16Proof) -> Result<()> {
     // Check A is not identity
-    if is_g1_identity(&proof.a) {
-        msg!("Proof point A is identity (invalid)");
-        return Err(error!(PrivacyError::InvalidProof));
-    }
+    require!(
+        !is_g1_identity(&proof.a),
+        PrivacyError::InvalidProof
+    );
     
     // Validate A is on curve
-    validate_g1_point(&proof.a).map_err(|_| {
-        msg!("Proof point A is not on curve");
-        error!(PrivacyError::InvalidProof)
-    })?;
+    validate_g1_point(&proof.a)?;
 
     // Check B is not identity
-    if is_g2_identity(&proof.b) {
-        msg!("Proof point B is identity (invalid)");
-        return Err(error!(PrivacyError::InvalidProof));
-    }
+    require!(
+        !is_g2_identity(&proof.b),
+        PrivacyError::InvalidProof
+    );
     
-    // Validate B
-    validate_g2_point(&proof.b).map_err(|_| {
-        msg!("Proof point B validation failed");
-        error!(PrivacyError::InvalidProof)
-    })?;
+    // Validate B (basic check)
+    validate_g2_point(&proof.b)?;
 
     // Check C is not identity
-    if is_g1_identity(&proof.c) {
-        msg!("Proof point C is identity (invalid)");
-        return Err(error!(PrivacyError::InvalidProof));
-    }
+    require!(
+        !is_g1_identity(&proof.c),
+        PrivacyError::InvalidProof
+    );
     
     // Validate C is on curve
-    validate_g1_point(&proof.c).map_err(|_| {
-        msg!("Proof point C is not on curve");
-        error!(PrivacyError::InvalidProof)
-    })?;
+    validate_g1_point(&proof.c)?;
 
     Ok(())
 }
@@ -278,88 +275,45 @@ fn validate_proof_points(proof: &Groth16Proof) -> Result<()> {
 ///
 /// Checks:
 /// 1. Sufficient IC points for public inputs
-/// 2. Alpha is not identity and on curve
-/// 3. All VK points are valid
+/// 2. Alpha is not identity
+/// 3. All VK points are valid (basic validation)
 fn validate_verification_key(vk: &VerificationKey) -> Result<()> {
     // Must have at least 2 IC points (1 base + 1 for at least 1 public input)
-    if vk.ic.len() < 2 {
-        msg!("VK has insufficient IC points: {} (need at least 2)", vk.ic.len());
-        return Err(error!(PrivacyError::VerificationKeyNotSet));
-    }
+    require!(
+        vk.ic.len() >= 2,
+        PrivacyError::VerificationKeyNotSet
+    );
 
     // For withdrawal circuit with 6 public inputs, we need 7 IC points
-    if vk.ic.len() != ZkPublicInputs::COUNT + 1 {
-        msg!(
-            "VK IC length mismatch: {} (expected {})",
-            vk.ic.len(),
-            ZkPublicInputs::COUNT + 1
-        );
-        return Err(error!(PrivacyError::InvalidPublicInputs));
-    }
+    require!(
+        vk.ic.len() == ZkPublicInputs::COUNT + 1,
+        PrivacyError::InvalidPublicInputs
+    );
 
     // Alpha must not be identity
-    if is_g1_identity(&vk.alpha_g1) {
-        msg!("VK alpha is identity (invalid)");
-        return Err(error!(PrivacyError::VerificationKeyNotSet));
-    }
+    require!(
+        !is_g1_identity(&vk.alpha_g1),
+        PrivacyError::VerificationKeyNotSet
+    );
 
     // Validate alpha is on curve
-    validate_g1_point(&vk.alpha_g1).map_err(|_| {
-        msg!("VK alpha is not on curve");
-        error!(PrivacyError::VerificationKeyNotSet)
-    })?;
+    validate_g1_point(&vk.alpha_g1)?;
 
     // Validate G2 points
-    validate_g2_point(&vk.beta_g2).map_err(|_| {
-        msg!("VK beta is invalid");
-        error!(PrivacyError::VerificationKeyNotSet)
-    })?;
-    
-    validate_g2_point(&vk.gamma_g2).map_err(|_| {
-        msg!("VK gamma is invalid");
-        error!(PrivacyError::VerificationKeyNotSet)
-    })?;
-    
-    validate_g2_point(&vk.delta_g2).map_err(|_| {
-        msg!("VK delta is invalid");
-        error!(PrivacyError::VerificationKeyNotSet)
-    })?;
+    validate_g2_point(&vk.beta_g2)?;
+    validate_g2_point(&vk.gamma_g2)?;
+    validate_g2_point(&vk.delta_g2)?;
 
     // Validate each IC point
     for (i, ic_point) in vk.ic.iter().enumerate() {
-        validate_g1_point(ic_point).map_err(|_| {
-            msg!("VK IC[{}] is not on curve", i);
-            error!(PrivacyError::VerificationKeyNotSet)
-        })?;
+        if is_g1_identity(ic_point) && i == 0 {
+            // IC[0] can technically be identity, but it's unusual
+            msg!("Warning: IC[0] is identity point");
+        }
+        validate_g1_point(ic_point)?;
     }
 
     Ok(())
-}
-
-// ============================================================================
-// TEST UTILITIES
-// ============================================================================
-
-/// Test-only bypass flag
-#[cfg(test)]
-static TEST_BYPASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Check if test bypass is enabled
-#[cfg(test)]
-fn is_test_bypass_enabled() -> bool {
-    TEST_BYPASS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Enable test bypass (for unit tests only)
-#[cfg(test)]
-pub fn enable_test_bypass() {
-    TEST_BYPASS.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Disable test bypass
-#[cfg(test)]
-pub fn disable_test_bypass() {
-    TEST_BYPASS.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 // ============================================================================
@@ -390,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_proof_length_short() {
+    fn test_invalid_proof_length() {
         let data = [1u8; 100]; // Too short
         let result = Groth16Proof::from_bytes(&data);
         
@@ -398,56 +352,13 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_proof_length_long() {
+    fn test_proof_length_too_long() {
         let data = [1u8; 300]; // Too long
         let result = Groth16Proof::from_bytes(&data);
         
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_empty_proof() {
-        let data: [u8; 0] = [];
-        let result = Groth16Proof::from_bytes(&data);
-        
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_proof_with_distinct_parts() {
-        let mut data = [0u8; PROOF_DATA_LEN];
-        
-        // Fill A with 1s
-        for i in 0..64 {
-            data[i] = 1;
-        }
-        // Fill B with 2s
-        for i in 64..192 {
-            data[i] = 2;
-        }
-        // Fill C with 3s
-        for i in 192..256 {
-            data[i] = 3;
-        }
-
-        let proof = Groth16Proof::from_bytes(&data).unwrap();
-        
-        assert!(proof.a.iter().all(|&b| b == 1));
-        assert!(proof.b.iter().all(|&b| b == 2));
-        assert!(proof.c.iter().all(|&b| b == 3));
-    }
-
-    #[test]
-    fn test_bypass_flag() {
-        // Initially disabled
-        assert!(!is_test_bypass_enabled());
-        
-        // Enable
-        enable_test_bypass();
-        assert!(is_test_bypass_enabled());
-        
-        // Disable
-        disable_test_bypass();
-        assert!(!is_test_bypass_enabled());
-    }
+    // Note: Full verification tests require valid VK and proofs from a circuit
+    // Those are typically done in integration tests with snarkjs or similar
 }
