@@ -1,18 +1,18 @@
-//! Pause Pool Instruction
+//! Unpause Pool Instruction
 //!
-//! Emergency stop for the privacy pool.
-//! Blocks all deposits and withdrawals when paused.
+//! Resume pool operations after emergency pause.
+//! Only callable by pool authority.
 
 use anchor_lang::prelude::*;
 
 use crate::error::PrivacyError;
-use crate::events::PoolPaused;
+use crate::events::PoolUnpaused;
 use crate::state::PoolConfig;
 
-/// Accounts for pause_pool instruction.
+/// Accounts for unpause_pool instruction.
 #[derive(Accounts)]
-pub struct PausePool<'info> {
-    /// Pool configuration account.
+pub struct UnpausePool<'info> {
+    /// Pool configuration to unpause.
     #[account(
         mut,
         seeds = [b"pool", pool_config.token_mint.as_ref()],
@@ -25,21 +25,19 @@ pub struct PausePool<'info> {
     pub authority: Signer<'info>,
 }
 
-/// Handler for pause_pool instruction.
-pub fn handler(ctx: Context<PausePool>) -> Result<()> {
+/// Handler for unpause_pool instruction.
+pub fn handler(ctx: Context<UnpausePool>) -> Result<()> {
     let pool_config = &mut ctx.accounts.pool_config;
 
-    // Set paused state
-    pool_config.set_paused(true);
+    pool_config.set_paused(false);
 
-    // Emit event
-    emit!(PoolPaused {
+    emit!(PoolUnpaused {
         pool: pool_config.key(),
         authority: ctx.accounts.authority.key(),
         timestamp: Clock::get()?.unix_timestamp,
     });
 
-    msg!("Pool paused");
+    msg!("Pool unpaused by authority");
 
     Ok(())
 }

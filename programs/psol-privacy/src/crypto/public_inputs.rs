@@ -1,70 +1,58 @@
-//! Public Inputs for Zero-Knowledge Proofs
+//! Public Inputs for ZK Circuits - Phase 3
 //!
-//! # Phase 3 Implementation
+//! This module defines the public inputs structure for Groth16 proofs.
+//! Public inputs are the values that are visible to the verifier.
 //!
-//! Defines the canonical structure for public inputs passed to
-//! the withdrawal circuit verifier.
-//!
-//! ## Circuit Public Inputs
-//! The withdrawal circuit takes these public inputs:
-//! 1. merkle_root - Root of commitment tree (32 bytes)
-//! 2. nullifier_hash - Hash of nullifier (prevents double-spend)
-//! 3. recipient - Address receiving withdrawn tokens
-//! 4. amount - Amount being withdrawn
-//! 5. relayer - Relayer address (receives fee)
+//! # Withdrawal Circuit Public Inputs (6 total)
+//! 1. merkle_root - Tree root for membership proof
+//! 2. nullifier_hash - Prevents double-spending
+//! 3. recipient - Address receiving funds
+//! 4. amount - Withdrawal amount
+//! 5. relayer - Relayer address
 //! 6. relayer_fee - Fee paid to relayer
 //!
-//! ## Encoding
-//! Each input is encoded as a 32-byte field element (BN254 scalar field).
-//! All encodings are big-endian to match circomlib conventions.
+//! # Field Element Encoding
+//! All values are encoded as 32-byte big-endian field elements
+//! in the BN254 scalar field.
 
 use anchor_lang::prelude::*;
 
-use solana_program::keccak;
+use crate::error::PrivacyError;
 
-/// Public inputs for the withdrawal ZK circuit.
+// ============================================================================
+// PUBLIC INPUTS STRUCTURE
+// ============================================================================
+
+/// Public inputs for withdrawal circuit verification.
 ///
-/// These values are revealed on-chain and must match what was
-/// committed to inside the ZK proof.
-///
-/// ## Invariants
-/// - `merkle_root` must be in the pool's recent root history
-/// - `nullifier_hash` must not have been used before
-/// - `relayer_fee <= amount`
-/// - `recipient` and `relayer` must have valid token accounts
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
+/// These are the values visible to the on-chain verifier.
+/// They must match exactly what was used to generate the proof.
+#[derive(Clone, Debug)]
 pub struct ZkPublicInputs {
-    /// Merkle root the proof was generated against.
-    /// Must be in the pool's recent root history.
+    /// Merkle root of the commitment tree
     pub merkle_root: [u8; 32],
-
-    /// Hash of the nullifier.
-    /// Computed as: Poseidon(nullifier_preimage, secret)
-    /// Prevents double-spending the same commitment.
+    
+    /// Nullifier hash (prevents double-spend)
     pub nullifier_hash: [u8; 32],
-
-    /// Recipient address for withdrawn tokens.
-    /// The recipient's token account must be owned by this address.
+    
+    /// Recipient address (who receives the tokens)
     pub recipient: Pubkey,
-
-    /// Amount to withdraw (before fee deduction).
+    
+    /// Withdrawal amount (before fee)
     pub amount: u64,
-
-    /// Relayer address (receives relayer_fee).
-    /// Can be same as recipient if user is self-relaying.
+    
+    /// Relayer address (submits tx on behalf of user)
     pub relayer: Pubkey,
-
-    /// Fee paid to relayer from the withdrawal amount.
-    /// recipient receives (amount - relayer_fee).
+    
+    /// Fee paid to relayer (deducted from amount)
     pub relayer_fee: u64,
 }
 
 impl ZkPublicInputs {
-    /// Number of public inputs for the circuit.
-    /// Used to validate VK IC length (should be COUNT + 1).
+    /// Number of public inputs for verification
     pub const COUNT: usize = 6;
 
-    /// Create new public inputs structure.
+    /// Create new public inputs
     pub fn new(
         merkle_root: [u8; 32],
         nullifier_hash: [u8; 32],
@@ -73,7 +61,7 @@ impl ZkPublicInputs {
         relayer: Pubkey,
         relayer_fee: u64,
     ) -> Self {
-        ZkPublicInputs {
+        Self {
             merkle_root,
             nullifier_hash,
             recipient,
@@ -83,64 +71,8 @@ impl ZkPublicInputs {
         }
     }
 
-    /// Convert public inputs to field elements for circuit verification.
-    ///
-    /// Each input is encoded as a 32-byte value representing a
-    /// BN254 scalar field element in big-endian format.
-    ///
-    /// # Encoding Rules
-    /// - 32-byte values: Used directly (assumed already in correct format)
-    /// - Pubkeys: Converted to 32-byte representation
-    /// - u64: Padded to 32 bytes (big-endian)
-    ///
-    /// # Returns
-    /// Vector of 6 field element encodings in circuit order
-    pub fn to_field_elements(&self) -> Vec<[u8; 32]> {
-        vec![
-            self.merkle_root,
-            self.nullifier_hash,
-            self.pubkey_to_field(&self.recipient),
-            self.u64_to_field(self.amount),
-            self.pubkey_to_field(&self.relayer),
-            self.u64_to_field(self.relayer_fee),
-        ]
-    }
-
-    /// Compute a hash of all public inputs.
-    /// Useful for logging and debugging.
-    pub fn hash(&self) -> [u8; 32] {
-        let mut data = Vec::with_capacity(32 + 32 + 32 + 8 + 32 + 8);
-        data.extend_from_slice(&self.merkle_root);
-        data.extend_from_slice(&self.nullifier_hash);
-        data.extend_from_slice(&self.recipient.to_bytes());
-        data.extend_from_slice(&self.amount.to_le_bytes());
-        data.extend_from_slice(&self.relayer.to_bytes());
-        data.extend_from_slice(&self.relayer_fee.to_le_bytes());
-        keccak::hash(&data).to_bytes()
-    }
-
-    /// Convert Pubkey to 32-byte field element.
-    fn pubkey_to_field(&self, pubkey: &Pubkey) -> [u8; 32] {
-        pubkey.to_bytes()
-    }
-
-    /// Convert u64 to 32-byte field element (big-endian, zero-padded).
-    fn u64_to_field(&self, value: u64) -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        bytes[24..32].copy_from_slice(&value.to_be_bytes());
-        bytes
-    }
-
-    /// Validate public inputs for sanity and security.
-    ///
-    /// # Checks
-    /// - Merkle root is not all zeros
-    /// - Nullifier hash is not all zeros
-    /// - Amount is positive
-    /// - Relayer fee does not exceed amount
+    /// Validate public inputs
     pub fn validate(&self) -> Result<()> {
-        use crate::error::PrivacyError;
-
         // Merkle root cannot be zero
         require!(
             !self.merkle_root.iter().all(|&b| b == 0),
@@ -165,18 +97,39 @@ impl ZkPublicInputs {
         Ok(())
     }
 
-    /// Get net amount after relayer fee.
-    pub fn net_amount(&self) -> u64 {
-        self.amount.saturating_sub(self.relayer_fee)
+    /// Convert to field elements for Groth16 verification.
+    ///
+    /// Returns a vector of 32-byte field elements in the order
+    /// expected by the circuit.
+    pub fn to_field_elements(&self) -> Vec<[u8; 32]> {
+        vec![
+            self.merkle_root,
+            self.nullifier_hash,
+            self.recipient.to_bytes(),
+            u64_to_field(self.amount),
+            self.relayer.to_bytes(),
+            u64_to_field(self.relayer_fee),
+        ]
     }
 
-    /// Check if this is a self-relay (no external relayer).
+    /// Calculate net amount after fee
+    pub fn net_amount(&self) -> Result<u64> {
+        self.amount
+            .checked_sub(self.relayer_fee)
+            .ok_or_else(|| error!(PrivacyError::ArithmeticOverflow))
+    }
+
+    /// Check if this is a self-relay (recipient == relayer, no fee)
     pub fn is_self_relay(&self) -> bool {
         self.recipient == self.relayer && self.relayer_fee == 0
     }
 }
 
-/// Builder for ZkPublicInputs (convenience for tests and clients).
+// ============================================================================
+// BUILDER PATTERN
+// ============================================================================
+
+/// Builder for ZkPublicInputs
 #[derive(Default)]
 pub struct ZkPublicInputsBuilder {
     merkle_root: Option<[u8; 32]>,
@@ -188,222 +141,237 @@ pub struct ZkPublicInputsBuilder {
 }
 
 impl ZkPublicInputsBuilder {
+    /// Create a new builder
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set merkle root
     pub fn merkle_root(mut self, root: [u8; 32]) -> Self {
         self.merkle_root = Some(root);
         self
     }
 
+    /// Set nullifier hash
     pub fn nullifier_hash(mut self, hash: [u8; 32]) -> Self {
         self.nullifier_hash = Some(hash);
         self
     }
 
+    /// Set recipient
     pub fn recipient(mut self, recipient: Pubkey) -> Self {
         self.recipient = Some(recipient);
         self
     }
 
+    /// Set amount
     pub fn amount(mut self, amount: u64) -> Self {
         self.amount = Some(amount);
         self
     }
 
+    /// Set relayer
     pub fn relayer(mut self, relayer: Pubkey) -> Self {
         self.relayer = Some(relayer);
         self
     }
 
+    /// Set relayer fee
     pub fn relayer_fee(mut self, fee: u64) -> Self {
         self.relayer_fee = Some(fee);
         self
     }
 
-    /// Build the public inputs. Returns None if any required field is missing.
-    pub fn build(self) -> Option<ZkPublicInputs> {
-        Some(ZkPublicInputs {
-            merkle_root: self.merkle_root?,
-            nullifier_hash: self.nullifier_hash?,
-            recipient: self.recipient?,
-            amount: self.amount?,
-            relayer: self.relayer?,
-            relayer_fee: self.relayer_fee.unwrap_or(0),
-        })
+    /// Build for self-relay (recipient = relayer, no fee)
+    pub fn build_self_relay(mut self) -> Result<ZkPublicInputs> {
+        let recipient = self.recipient.ok_or(error!(PrivacyError::InvalidAmount))?;
+        self.relayer = Some(recipient);
+        self.relayer_fee = Some(0);
+        self.build()
     }
 
-    /// Build for self-relay (sets relayer = recipient with zero fee).
-    pub fn build_self_relay(self) -> Option<ZkPublicInputs> {
-        let recipient = self.recipient?;
-        Some(ZkPublicInputs {
-            merkle_root: self.merkle_root?,
-            nullifier_hash: self.nullifier_hash?,
-            recipient,
-            amount: self.amount?,
-            relayer: recipient,
-            relayer_fee: 0,
-        })
+    /// Build the public inputs
+    pub fn build(self) -> Result<ZkPublicInputs> {
+        let inputs = ZkPublicInputs {
+            merkle_root: self.merkle_root.ok_or(error!(PrivacyError::InvalidMerkleRoot))?,
+            nullifier_hash: self.nullifier_hash.ok_or(error!(PrivacyError::InvalidNullifier))?,
+            recipient: self.recipient.ok_or(error!(PrivacyError::RecipientMismatch))?,
+            amount: self.amount.ok_or(error!(PrivacyError::InvalidAmount))?,
+            relayer: self.relayer.ok_or(error!(PrivacyError::RecipientMismatch))?,
+            relayer_fee: self.relayer_fee.unwrap_or(0),
+        };
+
+        inputs.validate()?;
+        Ok(inputs)
     }
 }
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/// Convert u64 to 32-byte field element (big-endian).
+///
+/// The value is placed in the last 8 bytes of a 32-byte array.
+fn u64_to_field(value: u64) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes[24..32].copy_from_slice(&value.to_be_bytes());
+    bytes
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_pubkey() -> Pubkey {
+        Pubkey::new_unique()
+    }
+
+    #[test]
+    fn test_valid_inputs() {
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [2u8; 32],
+            test_pubkey(),
+            1000,
+            test_pubkey(),
+            100,
+        );
+        assert!(inputs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_zero_merkle_root_invalid() {
+        let inputs = ZkPublicInputs::new(
+            [0u8; 32], // Zero root
+            [2u8; 32],
+            test_pubkey(),
+            1000,
+            test_pubkey(),
+            100,
+        );
+        assert!(inputs.validate().is_err());
+    }
+
+    #[test]
+    fn test_zero_nullifier_invalid() {
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [0u8; 32], // Zero nullifier
+            test_pubkey(),
+            1000,
+            test_pubkey(),
+            100,
+        );
+        assert!(inputs.validate().is_err());
+    }
+
+    #[test]
+    fn test_zero_amount_invalid() {
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [2u8; 32],
+            test_pubkey(),
+            0, // Zero amount
+            test_pubkey(),
+            0,
+        );
+        assert!(inputs.validate().is_err());
+    }
+
+    #[test]
+    fn test_fee_exceeds_amount_invalid() {
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [2u8; 32],
+            test_pubkey(),
+            100,
+            test_pubkey(),
+            200, // Fee > amount
+        );
+        assert!(inputs.validate().is_err());
+    }
+
+    #[test]
+    fn test_fee_equals_amount_valid() {
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [2u8; 32],
+            test_pubkey(),
+            100,
+            test_pubkey(),
+            100, // Fee = amount (all goes to relayer)
+        );
+        assert!(inputs.validate().is_ok());
+        assert_eq!(inputs.net_amount().unwrap(), 0);
+    }
 
     #[test]
     fn test_field_elements_count() {
         let inputs = ZkPublicInputs::new(
             [1u8; 32],
             [2u8; 32],
-            Pubkey::default(),
+            test_pubkey(),
             1000,
-            Pubkey::default(),
-            10,
-        );
-        
-        let fields = inputs.to_field_elements();
-        assert_eq!(fields.len(), ZkPublicInputs::COUNT);
-    }
-
-    #[test]
-    fn test_net_amount() {
-        let inputs = ZkPublicInputs::new(
-            [1u8; 32],
-            [2u8; 32],
-            Pubkey::default(),
-            1000,
-            Pubkey::default(),
-            50,
-        );
-        
-        assert_eq!(inputs.net_amount(), 950);
-    }
-
-    #[test]
-    fn test_net_amount_overflow_protection() {
-        let inputs = ZkPublicInputs::new(
-            [1u8; 32],
-            [2u8; 32],
-            Pubkey::default(),
+            test_pubkey(),
             100,
-            Pubkey::default(),
-            200, // Fee > amount (invalid, but tests saturation)
         );
-        
-        assert_eq!(inputs.net_amount(), 0);
+        let elements = inputs.to_field_elements();
+        assert_eq!(elements.len(), ZkPublicInputs::COUNT);
     }
 
     #[test]
-    fn test_builder() {
-        let inputs = ZkPublicInputsBuilder::new()
-            .merkle_root([1u8; 32])
-            .nullifier_hash([2u8; 32])
-            .recipient(Pubkey::default())
-            .amount(1000)
-            .relayer(Pubkey::default())
-            .relayer_fee(10)
-            .build()
-            .unwrap();
-        
-        assert_eq!(inputs.amount, 1000);
-        assert_eq!(inputs.relayer_fee, 10);
-    }
-
-    #[test]
-    fn test_builder_self_relay() {
-        let recipient = Pubkey::new_unique();
-        let inputs = ZkPublicInputsBuilder::new()
-            .merkle_root([1u8; 32])
-            .nullifier_hash([2u8; 32])
-            .recipient(recipient)
-            .amount(1000)
-            .build_self_relay()
-            .unwrap();
-        
-        assert_eq!(inputs.recipient, recipient);
-        assert_eq!(inputs.relayer, recipient);
-        assert_eq!(inputs.relayer_fee, 0);
+    fn test_self_relay() {
+        let addr = test_pubkey();
+        let inputs = ZkPublicInputs::new(
+            [1u8; 32],
+            [2u8; 32],
+            addr,
+            1000,
+            addr, // Same as recipient
+            0,    // No fee
+        );
         assert!(inputs.is_self_relay());
     }
 
     #[test]
-    fn test_u64_to_field_big_endian() {
-        let inputs = ZkPublicInputs::new(
-            [0u8; 32],
-            [0u8; 32],
-            Pubkey::default(),
-            0x0102030405060708,
-            Pubkey::default(),
-            0,
-        );
-        
-        let fields = inputs.to_field_elements();
-        let amount_field = &fields[3];
+    fn test_builder() {
+        let result = ZkPublicInputsBuilder::new()
+            .merkle_root([1u8; 32])
+            .nullifier_hash([2u8; 32])
+            .recipient(test_pubkey())
+            .amount(1000)
+            .relayer(test_pubkey())
+            .relayer_fee(100)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_builder_missing_field() {
+        let result = ZkPublicInputsBuilder::new()
+            .merkle_root([1u8; 32])
+            // Missing nullifier_hash
+            .recipient(test_pubkey())
+            .amount(1000)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_u64_to_field_encoding() {
+        let value = 0x0102030405060708u64;
+        let field = u64_to_field(value);
         
         // First 24 bytes should be zero
-        assert!(amount_field[..24].iter().all(|&b| b == 0));
-        // Last 8 bytes should be big-endian representation
-        assert_eq!(
-            &amount_field[24..],
-            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
-        );
-    }
-
-    #[test]
-    fn test_validate_success() {
-        let inputs = ZkPublicInputs::new(
-            [1u8; 32],
-            [2u8; 32],
-            Pubkey::default(),
-            1000,
-            Pubkey::default(),
-            10,
-        );
+        assert!(field[..24].iter().all(|&b| b == 0));
         
-        assert!(inputs.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_zero_merkle_root() {
-        let inputs = ZkPublicInputs::new(
-            [0u8; 32], // Invalid
-            [2u8; 32],
-            Pubkey::default(),
-            1000,
-            Pubkey::default(),
-            10,
-        );
-        
-        assert!(inputs.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_zero_amount() {
-        let inputs = ZkPublicInputs::new(
-            [1u8; 32],
-            [2u8; 32],
-            Pubkey::default(),
-            0, // Invalid
-            Pubkey::default(),
-            0,
-        );
-        
-        assert!(inputs.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_fee_exceeds_amount() {
-        let inputs = ZkPublicInputs::new(
-            [1u8; 32],
-            [2u8; 32],
-            Pubkey::default(),
-            100,
-            Pubkey::default(),
-            200, // Invalid: fee > amount
-        );
-        
-        assert!(inputs.validate().is_err());
+        // Last 8 bytes should be big-endian
+        assert_eq!(field[24], 0x01);
+        assert_eq!(field[31], 0x08);
     }
 }

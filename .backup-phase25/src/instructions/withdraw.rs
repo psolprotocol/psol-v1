@@ -1,4 +1,38 @@
 //! Withdraw Instruction
+//!
+//! Withdraws tokens from the privacy pool using a Groth16 zero-knowledge proof.
+//!
+//! # Phase 3 Implementation
+//!
+//! Full Groth16 verification is now implemented using Solana's alt_bn128 precompiles.
+//! In production builds, all proofs are cryptographically verified.
+//!
+//! # Architecture
+//! 1. User generates ZK proof off-chain proving:
+//!    - Knowledge of (secret, nullifier_preimage) for a commitment in the tree
+//!    - The commitment was computed correctly with the claimed amount
+//!    - The nullifier_hash is correctly derived
+//!
+//! 2. User (or relayer) submits withdrawal transaction with:
+//!    - Proof data (256 bytes: A || B || C curve points)
+//!    - Public inputs (merkle_root, nullifier_hash, recipient, amount, relayer, fee)
+//!
+//! 3. On-chain verification:
+//!    - Check merkle_root is in recent history
+//!    - Check nullifier not already spent (via PDA existence)
+//!    - Verify Groth16 proof using pairing check
+//!    - Create SpentNullifier PDA to mark as spent
+//!    - Transfer tokens to recipient
+//!
+//! # Relayer Model
+//! Relayers submit transactions on behalf of users for privacy:
+//! - User's address never appears on-chain
+//! - Relayer receives fee from withdrawal amount
+//! - Relayer pays transaction fees
+//!
+//! # Dev Mode
+//! When built with `--features dev-mode`, proof verification is bypassed.
+//! This is ONLY for testing - NEVER use in production!
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
@@ -11,6 +45,7 @@ use crate::state::{
     VerificationKeyAccount,
 };
 
+/// Accounts for withdraw instruction.
 #[derive(Accounts)]
 #[instruction(
     proof_data: Vec<u8>,
@@ -22,6 +57,7 @@ use crate::state::{
     relayer_fee: u64,
 )]
 pub struct Withdraw<'info> {
+    /// Pool configuration.
     #[account(
         mut,
         seeds = [b"pool", pool_config.token_mint.as_ref()],
@@ -29,6 +65,7 @@ pub struct Withdraw<'info> {
     )]
     pub pool_config: Account<'info, PoolConfig>,
 
+    /// Merkle tree state (for root verification).
     #[account(
         seeds = [b"merkle_tree", pool_config.key().as_ref()],
         bump,
@@ -36,6 +73,7 @@ pub struct Withdraw<'info> {
     )]
     pub merkle_tree: Account<'info, MerkleTree>,
 
+    /// Verification key for proof verification.
     #[account(
         seeds = [b"verification_key", pool_config.key().as_ref()],
         bump = verification_key.bump,
@@ -44,6 +82,9 @@ pub struct Withdraw<'info> {
     )]
     pub verification_key: Account<'info, VerificationKeyAccount>,
 
+    /// Spent nullifier PDA - created by this instruction.
+    /// If account already exists, the nullifier was already spent.
+    /// Seeds: ["nullifier", pool_config, nullifier_hash]
     #[account(
         init,
         payer = withdrawer,
@@ -53,6 +94,7 @@ pub struct Withdraw<'info> {
     )]
     pub spent_nullifier: Account<'info, SpentNullifier>,
 
+    /// Token vault (source of withdrawal).
     #[account(
         mut,
         seeds = [b"vault", pool_config.key().as_ref()],
@@ -62,6 +104,7 @@ pub struct Withdraw<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
 
+    /// Recipient's token account (receives amount - fee).
     #[account(
         mut,
         constraint = recipient_token_account.mint == pool_config.token_mint @ PrivacyError::InvalidMint,
@@ -69,6 +112,8 @@ pub struct Withdraw<'info> {
     )]
     pub recipient_token_account: Account<'info, TokenAccount>,
 
+    /// Relayer's token account (receives fee).
+    /// Can be same as recipient_token_account if self-relaying.
     #[account(
         mut,
         constraint = relayer_token_account.mint == pool_config.token_mint @ PrivacyError::InvalidMint,
@@ -76,13 +121,41 @@ pub struct Withdraw<'info> {
     )]
     pub relayer_token_account: Account<'info, TokenAccount>,
 
+    /// Withdrawer (relayer) - pays for transaction and nullifier account.
     #[account(mut)]
     pub withdrawer: Signer<'info>,
 
+    /// Token program.
     pub token_program: Program<'info, Token>,
+
+    /// System program (for nullifier account creation).
     pub system_program: Program<'info, System>,
 }
 
+/// Handler for withdraw instruction.
+///
+/// Withdraws tokens from the privacy pool using a Groth16 ZK proof.
+///
+/// # Verification Flow
+/// 1. Validate pool is not paused and VK is configured
+/// 2. Validate amount, fee, and vault balance
+/// 3. Verify merkle_root is in recent history
+/// 4. Verify Groth16 proof (or bypass in dev-mode)
+/// 5. Create SpentNullifier PDA (marks as spent)
+/// 6. Transfer tokens to recipient and relayer
+///
+/// # Arguments
+/// * `proof_data` - Serialized Groth16 proof (256 bytes: A || B || C)
+/// * `merkle_root` - Root to prove membership against
+/// * `nullifier_hash` - Hash of nullifier (prevents double-spend)
+/// * `recipient` - Address to receive withdrawn tokens
+/// * `amount` - Amount to withdraw (before fee)
+/// * `relayer` - Relayer address (receives fee)
+/// * `relayer_fee` - Fee paid to relayer
+///
+/// # Security
+/// - Proof verification is cryptographically enforced in production
+/// - In dev-mode builds, proof verification is bypassed for testing
 #[allow(clippy::too_many_arguments)]
 pub fn handler(
     ctx: Context<Withdraw>,
@@ -99,20 +172,39 @@ pub fn handler(
     let verification_key = &ctx.accounts.verification_key;
     let spent_nullifier = &mut ctx.accounts.spent_nullifier;
 
+    // ========== VALIDATION CHECKS ==========
+
+    // 1. Check pool is not paused
     pool_config.require_not_paused()?;
+
+    // 2. Check verification key is configured
     pool_config.require_vk_configured()?;
 
+    // 3. Validate amount
     require!(amount > 0, PrivacyError::InvalidAmount);
+
+    // 4. Validate fee doesn't exceed amount
     require!(relayer_fee <= amount, PrivacyError::RelayerFeeExceedsAmount);
+
+    // 5. Check vault has sufficient balance
     require!(
         ctx.accounts.vault.amount >= amount,
         PrivacyError::InsufficientBalance
     );
+
+    // 6. Verify merkle root is in recent history
     require!(
         merkle_tree.is_known_root(&merkle_root),
         PrivacyError::InvalidMerkleRoot
     );
 
+    // 7. Nullifier uniqueness is enforced by PDA creation
+    // If spent_nullifier account already exists, transaction will fail
+    // with "already initialized" error
+
+    // ========== ZK PROOF VERIFICATION ==========
+
+    // Construct public inputs
     let public_inputs = ZkPublicInputs::new(
         merkle_root,
         nullifier_hash,
@@ -121,12 +213,24 @@ pub fn handler(
         relayer,
         relayer_fee,
     );
+
+    // Validate public inputs structure
     public_inputs.validate()?;
 
+    // Get verification key
     let vk: VerificationKey = VerificationKey::from(verification_key.as_ref());
+
+    // Verify Groth16 proof
+    // In production: performs full pairing verification
+    // In dev-mode: bypasses proof check (for testing only!)
     let proof_valid = verify_groth16_proof(&proof_data, &vk, &public_inputs)?;
+
+    // Reject if proof is invalid
     require!(proof_valid, PrivacyError::InvalidProof);
 
+    // ========== STATE UPDATES (only reached if proof valid) ==========
+
+    // Initialize spent nullifier record
     spent_nullifier.initialize(
         pool_config.key(),
         nullifier_hash,
@@ -135,10 +239,12 @@ pub fn handler(
         ctx.bumps.spent_nullifier,
     );
 
+    // Calculate net amount after fee
     let net_amount = amount
         .checked_sub(relayer_fee)
         .ok_or(error!(PrivacyError::ArithmeticOverflow))?;
 
+    // Prepare PDA signer seeds for vault transfer
     let pool_seeds = &[
         b"pool".as_ref(),
         pool_config.token_mint.as_ref(),
@@ -146,6 +252,7 @@ pub fn handler(
     ];
     let signer_seeds = &[&pool_seeds[..]];
 
+    // Transfer net amount to recipient
     if net_amount > 0 {
         let cpi_accounts = Transfer {
             from: ctx.accounts.vault.to_account_info(),
@@ -160,6 +267,7 @@ pub fn handler(
         token::transfer(cpi_ctx, net_amount)?;
     }
 
+    // Transfer fee to relayer (if fee > 0)
     if relayer_fee > 0 {
         let cpi_accounts = Transfer {
             from: ctx.accounts.vault.to_account_info(),
@@ -174,8 +282,10 @@ pub fn handler(
         token::transfer(cpi_ctx, relayer_fee)?;
     }
 
+    // Update pool statistics
     pool_config.increment_withdrawals()?;
 
+    // Emit withdrawal event
     emit!(WithdrawEvent {
         pool: pool_config.key(),
         nullifier_hash,
@@ -187,5 +297,9 @@ pub fn handler(
     });
 
     msg!("Withdrawal successful");
+    msg!("Recipient: {}", recipient);
+    msg!("Net amount: {}", net_amount);
+    msg!("Relayer fee: {}", relayer_fee);
+
     Ok(())
 }
