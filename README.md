@@ -1,65 +1,99 @@
-# pSol Privacy Pool - Phase 3
+# pSol Privacy Pool – Phase 3 (devnet)
 
-Production-ready ZK-based privacy pool for Solana with Groth16 proof verification.
+Production-ready zero-knowledge privacy pool for Solana with Groth16 proof verification and nullifier-based double-spend protection.
+
+- Network: Solana **devnet**
+- Program ID: `Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ`
+- Explorer: https://explorer.solana.com/address/Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ?cluster=devnet  
+- Repository: https://github.com/psolprotocol/psol-v1  
+- Twitter / X: https://x.com/psolprotocol  
+
+---
 
 ## Features
 
 ### Core
-- **Private deposits**: Shield tokens in the pool
-- **Private withdrawals**: Unshield with ZK proof
-- **Private transfers**: 2-in-2-out transfers within pool
-- **Relayer support**: Privacy-preserving transaction submission
+
+- **Private deposits** – shield SPL tokens into the pool.
+- **Private withdrawals** – unshield with a Groth16 proof.
+- **Private transfers** – 2-in / 2-out shielded transfers inside the pool.
+- **Relayer fields** – withdraw flow includes relayer and fee fields for privacy-preserving submission.
 
 ### Cryptographic
-- **Groth16 verification**: Full pairing-based ZK verification
-- **BN254 curve**: alt_bn128 precompiles for efficiency
-- **Poseidon hashing**: Circuit-compatible commitments (off-chain)
-- **Keccak256 Merkle**: Efficient on-chain tree
+
+- **Groth16 verification** – full pairing-based ZK verification on-chain.
+- **BN254 curve** – via Solana alt_bn128 precompiles.
+- **Poseidon commitments** – off-chain commitments and nullifiers compatible with standard circomlib Poseidon.
+- **Keccak256 Merkle** – on-chain incremental Merkle tree with root history.
 
 ### Security
-- **Fail-closed**: Invalid proofs always rejected
-- **VK validation**: All curve points validated
-- **Double-spend prevention**: Nullifier PDAs
-- **No dev-mode bypass**: Production builds always verify
 
-## Architecture
+- **Fail-closed** – invalid proofs are always rejected.
+- **Verification key validation** – on-curve and non-identity checks for all VK points.
+- **Double-spend protection** – spent nullifiers tracked via PDAs.
+- **No dev-mode bypass** – production builds always execute full Groth16 verification.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        pSol Protocol                             │
-│                                                                  │
-│  ┌──────────┐      ┌──────────────┐      ┌──────────────┐       │
-│  │  Deposit │      │   Shielded   │      │   Withdraw   │       │
-│  │  Tokens  │ ───► │     Pool     │ ───► │   Tokens     │       │
-│  └──────────┘      └──────────────┘      └──────────────┘       │
-│       │                   │                     ▲                │
-│       │            ┌──────┴──────┐              │                │
-│       │            │   Private   │              │                │
-│       │            │  Transfer   │              │                │
-│       │            └─────────────┘              │                │
-│       │                                         │                │
-│       └─────── commitment ──────────── ZK proof ┘                │
-└─────────────────────────────────────────────────────────────────┘
-```
+---
 
-## Quick Start
+## Architecture Overview
 
-### 1. Build
+The program is an Anchor-based Solana contract that maintains:
+
+- A **pool configuration** account describing the pool and authority.
+- A **Merkle tree** account storing commitments and root history.
+- A **verification key** account storing Groth16 VK data.
+- A **vault** account holding the pooled SPL tokens.
+- **Spent nullifier** accounts preventing double spends.
+
+High-level flows:
+
+1. **Deposit**
+   - User computes a commitment off-chain using Poseidon.
+   - Tokens are transferred into the vault.
+   - Commitment is inserted into the on-chain Merkle tree.
+
+2. **Private transfer (2-in / 2-out)**
+   - User proves in zero-knowledge that two existing notes are spent
+     and two new notes are created, preserving value.
+   - Nullifiers for inputs are marked as spent.
+   - New commitments are added to the Merkle tree.
+
+3. **Withdraw**
+   - User provides a proof that a commitment exists in the tree
+     and has not been spent.
+   - Nullifier is recorded.
+   - Tokens are released from the vault to the recipient, optionally via a relayer.
+
+---
+
+## Quick Start (Local Build and Devnet Deploy)
+
+### 1. Prerequisites
+
+- Rust toolchain
+- Solana CLI
+- Anchor CLI
+- Node.js and Yarn or npm
+
+### 2. Clone and build
 
 ```bash
+git clone https://github.com/psolprotocol/psol-v1.git
+cd psol-v1
+
+solana config set --url devnet
 cargo build-sbf
-```
+3. Deploy to devnet (fixed program ID)
+bash
+Copy code
+solana program deploy target/deploy/psol_privacy.so \
+  --program-id Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ
+After deployment, verify on Solana Explorer using the link above.
 
-### 2. Deploy
-
-```bash
-solana program deploy target/deploy/psol_privacy.so
-```
-
-### 3. Initialize Pool
-
-```javascript
-await program.methods.initializePool(20, 100).accounts({
+4. Initialize pool (Anchor client example)
+ts
+Copy code
+await program.methods.initializePool(depth, rootHistorySize).accounts({
   poolConfig,
   merkleTree,
   verificationKey,
@@ -70,34 +104,36 @@ await program.methods.initializePool(20, 100).accounts({
   systemProgram,
   rent,
 }).rpc();
-```
-
-### 4. Set Verification Key
-
-```javascript
+5. Set verification key
+ts
+Copy code
 await program.methods.setVerificationKey(
-  vk_alpha_g1,
-  vk_beta_g2,
-  vk_gamma_g2,
-  vk_delta_g2,
-  vk_ic,
+  vkAlphaG1,
+  vkBetaG2,
+  vkGammaG2,
+  vkDeltaG2,
+  vkIc,
 ).accounts({
   poolConfig,
   verificationKey,
   authority,
 }).rpc();
-```
+6. Deposit (off-chain Poseidon, on-chain insert)
+Off-chain (example only):
 
-### 5. Deposit
+ts
+Copy code
+const poseidon = require("circomlib").poseidon;
 
-```javascript
-// Compute commitment OFF-CHAIN
-const poseidon = require('circomlib').poseidon;
 const secret = crypto.randomBytes(32);
 const nullifierPreimage = crypto.randomBytes(32);
-const commitment = poseidon([secret, nullifierPreimage, amount]);
 
-// Deposit on-chain
+const commitment = poseidon([secret, nullifierPreimage, amount]);
+// Save (secret, nullifierPreimage, leafIndex) securely off-chain
+On-chain:
+
+ts
+Copy code
 await program.methods.deposit(amount, commitment).accounts({
   poolConfig,
   merkleTree,
@@ -106,14 +142,11 @@ await program.methods.deposit(amount, commitment).accounts({
   user,
   tokenProgram,
 }).rpc();
+7. Withdraw (Groth16 proof)
+Off-chain, generate proof with snarkjs or equivalent:
 
-// SAVE: (secret, nullifierPreimage, leafIndex)
-```
-
-### 6. Withdraw
-
-```javascript
-// Generate proof OFF-CHAIN using snarkjs
+ts
+Copy code
 const proof = await generateWithdrawalProof({
   secret,
   nullifierPreimage,
@@ -124,8 +157,10 @@ const proof = await generateWithdrawalProof({
   relayer,
   relayerFee,
 });
+On-chain:
 
-// Withdraw on-chain
+ts
+Copy code
 await program.methods.withdraw(
   proof,
   merkleRoot,
@@ -146,41 +181,55 @@ await program.methods.withdraw(
   tokenProgram,
   systemProgram,
 }).rpc();
-```
+Note: This repository contains the on-chain program only. Valid proofs require circuits and proving/verifying keys that match the public input layout described in MIGRATION_GUIDE.md.
 
-## Account Structure
+Account Model
+Account	PDA Seeds	Purpose
+PoolConfig	["pool", token_mint]	Pool configuration and owner
+MerkleTree	["merkle_tree", pool_config]	Commitment storage + roots
+VerificationKey	["verification_key", pool_config]	Groth16 verification key
+SpentNullifier	["nullifier", pool_config, nullifier]	Double-spend prevention
+Vault	["vault", pool_config]	Token custody account
 
-| Account | PDA Seeds | Purpose |
-|---------|-----------|---------|
-| PoolConfig | `["pool", token_mint]` | Pool settings |
-| MerkleTree | `["merkle_tree", pool_config]` | Commitment storage |
-| VerificationKey | `["verification_key", pool_config]` | Groth16 VK |
-| SpentNullifier | `["nullifier", pool_config, nullifier_hash]` | Double-spend prevention |
-| Vault | `["vault", pool_config]` | Token custody |
+Adjust seeds above if the on-chain definitions change; the Rust state modules are the source of truth.
 
-## Circuit Compatibility
+Circuit Compatibility
+Hash Functions
+Purpose	Function	Location
+Commitment	Poseidon(secret, nullifier, amount)	Off-chain
+Nullifier	Poseidon(nullifier, secret)	Off-chain
+Merkle parent	`Keccak256(left	
 
-### Hash Functions
+Poseidon Parameters
+Curve: BN254
 
-| Purpose | Function | Location |
-|---------|----------|----------|
-| Commitment | Poseidon(secret, nullifier, amount) | Off-chain |
-| Nullifier | Poseidon(nullifier, secret) | Off-chain |
-| Merkle tree | Keccak256(left, right) | On-chain |
+Field: Scalar field (Fr)
 
-### Poseidon Parameters (circomlib)
-- Curve: BN254
-- Field: Scalar field (Fr)
-- Full rounds: 8
-- Partial rounds: 57
+Parameters: Standard circomlib Poseidon over BN254 (Fr)
 
-## Security Model
+Circuits and client-side hashing must match these parameters and the ordering described in MIGRATION_GUIDE.md.
 
-1. **Privacy**: Deposits and withdrawals unlinkable
-2. **Soundness**: Cannot withdraw more than deposited
-3. **No double-spend**: Nullifiers enforced via PDAs
-4. **Fail-closed**: Invalid proofs always rejected
+Security Model
+Privacy – deposits, transfers, and withdrawals are unlinkable at the protocol level if used correctly.
 
-## License
+Soundness – users cannot withdraw more value than they deposited; value conservation is enforced by the circuit and Groth16 verification.
 
+No double-spend – nullifiers are enforced via PDAs; reused nullifiers are rejected.
+
+Fail-closed – malformed proofs, invalid VKs, or inconsistent inputs cause instruction failure.
+
+Roadmap (high level)
+Phase 1 – Prototype (basic deposit / withdraw PoC)
+
+Phase 2 – Security skeleton (state models, Anchor structure)
+
+Phase 2.5 – Cryptographic wiring (Groth16, Poseidon, Merkle tree)
+
+Phase 3 – Core privacy protocol (current devnet deployment)
+
+Phase 4 – Security hardening, tests, audit preparation
+
+Phase 5 – SDK, example dApps, and mainnet deployment
+
+License
 MIT
