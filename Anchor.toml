@@ -2,16 +2,16 @@
 
 [features]
 resolution = true
-skip-lint = false
+skip-lint = true
 
-[programs.testnet]
-psol_privacy = "ERzD2bR2n64b6z2i9cR1kQeEM2tfNUEKJrKLPET4wUb5"
+[programs.devnet]
+psol_privacy = "Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Testnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

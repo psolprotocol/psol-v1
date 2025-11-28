@@ -218,7 +218,7 @@ pub fn handler(
     public_inputs.validate()?;
 
     // Get verification key
-    let vk: VerificationKey = verification_key.into();
+    let vk: VerificationKey = VerificationKey::from(verification_key.as_ref());
 
     // Verify Groth16 proof
     // In production: performs full pairing verification

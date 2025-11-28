@@ -106,7 +106,7 @@ mod tests;
 use instructions::*;
 
 // IMPORTANT: Replace with actual program ID after deployment
-declare_id!("ERzD2bR2n64b6z2i9cR1kQeEM2tfNUEKJrKLPET4wUb5");
+declare_id!("Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ");
 
 #[program]
 pub mod psol_privacy {
