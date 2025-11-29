@@ -52,15 +52,13 @@ pub struct InitializePool<'info> {
     )]
     pub vault: Box<Account<'info, TokenAccount>>,
 
-    /// CHECK: Token mint validated by Anchor's token::mint constraint
-    pub token_mint: UncheckedAccount<'info>,
+    pub token_mint: Box<Account<'info, Mint>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handler(
@@ -79,31 +77,31 @@ pub fn handler(
 
     msg!("Initializing privacy pool...");
 
-    // Store keys in local scope to minimize stack
-    let pool_key = ctx.accounts.pool_config.key();
-    let vault_key = ctx.accounts.vault.key();
-    let tree_key = ctx.accounts.merkle_tree.key();
-    let vk_key = ctx.accounts.verification_key.key();
-    let auth_key = ctx.accounts.authority.key();
-    let mint_key = ctx.accounts.token_mint.key();
-    let bump = ctx.bumps.pool_config;
-
-    ctx.accounts.pool_config.initialize(
-        auth_key, mint_key, vault_key, tree_key, vk_key, tree_depth, bump,
+    let keys = (
+        ctx.accounts.pool_config.key(),
+        ctx.accounts.vault.key(),
+        ctx.accounts.merkle_tree.key(),
+        ctx.accounts.verification_key.key(),
+        ctx.accounts.authority.key(),
+        ctx.accounts.token_mint.key(),
     );
 
-    ctx.accounts.merkle_tree.initialize(pool_key, tree_depth, root_history_size)?;
-    ctx.accounts.verification_key.initialize(pool_key, ctx.bumps.verification_key);
+    ctx.accounts.pool_config.initialize(
+        keys.4, keys.5, keys.1, keys.2, keys.3, tree_depth, ctx.bumps.pool_config,
+    );
+
+    ctx.accounts.merkle_tree.initialize(keys.0, tree_depth, root_history_size)?;
+    ctx.accounts.verification_key.initialize(keys.0, ctx.bumps.verification_key);
 
     emit!(PoolInitialized {
-        pool: pool_key,
-        authority: auth_key,
-        token_mint: mint_key,
+        pool: keys.0,
+        authority: keys.4,
+        token_mint: keys.5,
         tree_depth,
         root_history_size,
         timestamp: Clock::get()?.unix_timestamp,
     });
 
-    msg!("Pool initialized: {}", pool_key);
+    msg!("Pool initialized: {}", keys.0);
     Ok(())
 }
