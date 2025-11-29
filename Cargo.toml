@@ -1,8 +1,14 @@
 [workspace]
-members = [
-    "programs/*"
-]
+members = ["programs/*"]
 resolver = "2"
+
+[workspace.dependencies]
+toml_datetime = "=0.6.5"
+toml_edit = "=0.21.0"
+toml = "=0.8.8"
+borsh = "=1.5.1"
+proc-macro2 = "=1.0.66"
+winnow = "=0.5.40"
 
 [profile.release]
 overflow-checks = true
