@@ -1,0 +1,141 @@
+# =============================================================================
+# pSol Relayer - Docker Compose Configuration
+# =============================================================================
+# Usage:
+#   Development: docker-compose up
+#   Production:  docker-compose --profile production up -d
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # Redis - Job Queue & Rate Limiting Storage
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: psol-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy volatile-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - psol-network
+
+  # ---------------------------------------------------------------------------
+  # Relayer Service
+  # ---------------------------------------------------------------------------
+  relayer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: psol-relayer
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Solana
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.devnet.solana.com}
+      - SOLANA_NETWORK=${SOLANA_NETWORK:-devnet}
+      - SOLANA_COMMITMENT=${SOLANA_COMMITMENT:-confirmed}
+      # Program
+      - PSOL_PROGRAM_ID=${PSOL_PROGRAM_ID:-DRDywerR6UCmvGCTTDf6aDefj7rLBKBQEp44DHrMeWkF}
+      - VERIFICATION_KEY_PATH=/app/keys/verification_key.json
+      # Wallet (from .env - never in compose file!)
+      - RELAYER_PRIVATE_KEY
+      - RELAYER_MIN_BALANCE=${RELAYER_MIN_BALANCE:-0.5}
+      # Fees
+      - BASE_FEE_BPS=${BASE_FEE_BPS:-50}
+      - MIN_FEE_LAMPORTS=${MIN_FEE_LAMPORTS:-10000}
+      - ENABLE_DYNAMIC_FEES=${ENABLE_DYNAMIC_FEES:-true}
+      # Server
+      - PORT=3000
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      # Redis (internal docker network)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # Rate Limiting
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-60}
+      - MAX_PENDING_PER_IP=${MAX_PENDING_PER_IP:-5}
+      - MAX_PENDING_GLOBAL=${MAX_PENDING_GLOBAL:-1000}
+      # Auth
+      - RELAYER_API_KEYS
+      - ADMIN_API_KEY
+      - ALLOWED_IPS
+      - REQUIRE_AUTH_FOR_WRITE=${REQUIRE_AUTH_FOR_WRITE:-false}
+      - ALLOW_UNAUTHENTICATED_READ=${ALLOW_UNAUTHENTICATED_READ:-true}
+      # Observability
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENABLE_METRICS=true
+      - NODE_ENV=${NODE_ENV:-development}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount verification key (read-only)
+      - ./keys:/app/keys:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - psol-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Nginx Reverse Proxy (Production)
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: psol-nginx
+    profiles:
+      - production
+    restart: unless-stopped
+    depends_on:
+      - relayer
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - psol-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  psol-network:
+    driver: bridge
+
+# -----------------------------------------------------------------------------
+# Volumes
+# -----------------------------------------------------------------------------
+volumes:
+  redis_data:
+    driver: local

@@ -15,7 +15,7 @@ mod tests;
 
 use instructions::*;
 
-declare_id!("651hQh7GPwv6Zeb4Ns9TWCWJRG7bW9tePt7x2smw9NmP");
+declare_id!("7kK3aVXN9nTv1dNubmr85FB85fK6PeRrDBsisu9Z4gQ9");
 
 #[program]
 pub mod psol_privacy {

@@ -19,3 +19,19 @@ Cargo.lock
 **/*.rs.bk
 program-keypair-backup.json
 target/deploy/*-keypair.json
+# Local Solana toolchain archives (do not commit)
+solana-release/
+solana-release-*.tar.bz2
+
+# Relayer & local key material (NEVER COMMIT)
+keygen/
+relayer*.json
+*.keypair.json
+
+# Local archives
+psol-relayer-hardened.zip
+
+# Node dependencies & env files
+node_modules/
+.env
+services/psol-relayer/.env

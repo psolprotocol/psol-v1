@@ -7,7 +7,7 @@ toml_datetime = "=0.6.5"
 toml_edit = "=0.21.0"
 toml = "=0.8.8"
 borsh = "=1.5.1"
-proc-macro2 = "=1.0.66"
+proc-macro2 = "1.0.86"
 winnow = "=0.5.40"
 
 [profile.release]
