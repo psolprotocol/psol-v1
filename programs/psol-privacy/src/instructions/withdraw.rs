@@ -106,6 +106,14 @@ pub fn handler(
 
     require!(amount >= MIN_WITHDRAWAL_AMOUNT, PrivacyError::InvalidAmount);
     require!(relayer_fee <= amount, PrivacyError::RelayerFeeExceedsAmount);
+    
+    // Enforce maximum relayer fee (10% = 1000 basis points)
+    let max_fee = amount
+        .checked_mul(MAX_RELAYER_FEE_BPS)
+        .and_then(|v| v.checked_div(10000))
+        .ok_or(error!(PrivacyError::ArithmeticOverflow))?;
+    require!(relayer_fee <= max_fee, PrivacyError::RelayerFeeExceedsAmount);
+    
     require!(ctx.accounts.vault.amount >= amount, PrivacyError::InsufficientBalance);
     require!(merkle_tree.is_known_root(&merkle_root), PrivacyError::InvalidMerkleRoot);
     require!(nullifier_hash != [0u8; 32], PrivacyError::InvalidNullifier);

@@ -139,7 +139,13 @@ function buildWithdrawInstructionData(
   // Note: In pSol, this comes from the proof public inputs
   // The relayer submitting the TX is the payer, but this field is the
   // relayer address that was committed to in the ZK proof
-  request.recipient.toBuffer().copy(buffer, offset); // Will be overwritten below
+  // BUG FIX: Was copying recipient, now copies relayer from request
+  if ('relayer' in request && request.relayer) {
+    (request.relayer as PublicKey).toBuffer().copy(buffer, offset);
+  } else {
+    // Fallback: use recipient as relayer (self-relay)
+    request.recipient.toBuffer().copy(buffer, offset);
+  }
   offset += 32;
 
   // 8. relayer_fee: u64 (8 bytes LE)
