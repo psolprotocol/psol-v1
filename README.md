@@ -1,235 +1,179 @@
-# pSol Privacy Pool – Phase 3 (devnet)
+pSol Privacy Protocol
 
-Production-ready zero-knowledge privacy pool for Solana with Groth16 proof verification and nullifier-based double-spend protection.
+Zero-knowledge privacy pool for Solana with Groth16 proof verification, nullifier-based double-spend protection, a TypeScript SDK, and a hardened relayer service.
 
-- Network: Solana **devnet**
-- Program ID: `Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ`
-- Explorer: https://explorer.solana.com/address/Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ?cluster=devnet  
-- Repository: https://github.com/psolprotocol/psol-v1  
-- Twitter / X: https://x.com/psolprotocol  
+Network: Solana devnet
 
----
+Program ID: <DEVNET_PROGRAM_ID>
 
-## Features
+Explorer: https://explorer.solana.com/address/<DEVNET_PROGRAM_ID>?cluster=devnet
 
-### Core
+Repository: https://github.com/psolprotocol/psol-v1
 
-- **Private deposits** – shield SPL tokens into the pool.
-- **Private withdrawals** – unshield with a Groth16 proof.
-- **Private transfers** – 2-in / 2-out shielded transfers inside the pool.
-- **Relayer fields** – withdraw flow includes relayer and fee fields for privacy-preserving submission.
+X / Twitter: https://x.com/psolprotocol
 
-### Cryptographic
+Update the Program ID above from Anchor.toml after deployment.
 
-- **Groth16 verification** – full pairing-based ZK verification on-chain.
-- **BN254 curve** – via Solana alt_bn128 precompiles.
-- **Poseidon commitments** – off-chain commitments and nullifiers compatible with standard circomlib Poseidon.
-- **Keccak256 Merkle** – on-chain incremental Merkle tree with root history.
+Components
 
-### Security
+This repository contains three main pieces:
 
-- **Fail-closed** – invalid proofs are always rejected.
-- **Verification key validation** – on-curve and non-identity checks for all VK points.
-- **Double-spend protection** – spent nullifiers tracked via PDAs.
-- **No dev-mode bypass** – production builds always execute full Groth16 verification.
+On-chain program (programs/psol-privacy)
+Anchor-based privacy pool with deposits, private transfers, and withdrawals.
 
----
+TypeScript SDK (psol-sdk)
+Client library for building commitments, generating proofs, and integrating pSol into dApps.
 
-## Architecture Overview
+Relayer service (services/psol-relayer)
+Node.js service that submits private withdrawals on behalf of users and handles fees, rate limits, and job tracking.
 
-The program is an Anchor-based Solana contract that maintains:
+Features
+Core protocol
 
-- A **pool configuration** account describing the pool and authority.
-- A **Merkle tree** account storing commitments and root history.
-- A **verification key** account storing Groth16 VK data.
-- A **vault** account holding the pooled SPL tokens.
-- **Spent nullifier** accounts preventing double spends.
+Private deposits into a shielded pool of SPL tokens.
 
-High-level flows:
+Private 2-in / 2-out transfers inside the pool.
 
-1. **Deposit**
-   - User computes a commitment off-chain using Poseidon.
-   - Tokens are transferred into the vault.
-   - Commitment is inserted into the on-chain Merkle tree.
+Private withdrawals with relayer and fee support.
 
-2. **Private transfer (2-in / 2-out)**
-   - User proves in zero-knowledge that two existing notes are spent
-     and two new notes are created, preserving value.
-   - Nullifiers for inputs are marked as spent.
-   - New commitments are added to the Merkle tree.
+Merkle tree of commitments with root history.
 
-3. **Withdraw**
-   - User provides a proof that a commitment exists in the tree
-     and has not been spent.
-   - Nullifier is recorded.
-   - Tokens are released from the vault to the recipient, optionally via a relayer.
+Cryptography
 
----
+Groth16 zkSNARK verification on-chain.
 
-## Quick Start (Local Build and Devnet Deploy)
+BN254 curve via Solana alt_bn128 precompiles.
 
-### 1. Prerequisites
+Poseidon-based commitments and nullifiers (off-chain, circomlib-compatible).
 
-- Rust toolchain
-- Solana CLI
-- Anchor CLI
-- Node.js and Yarn or npm
+Keccak256-based Merkle tree on-chain.
 
-### 2. Clone and build
+Security
 
-```bash
+Fail-closed design, invalid proofs are always rejected.
+
+Verification key validation for all curve points.
+
+Nullifier PDAs to prevent double spends.
+
+No dev-mode bypass in production builds.
+
+Repository layout
+
+psol-v1/
+  Anchor.toml
+  Cargo.toml
+  package.json
+  programs/
+    psol-privacy/ # On-chain Anchor program
+  psol-sdk/ # TypeScript SDK
+  services/
+    psol-relayer/ # Relayer service (Node + Redis)
+
+Getting started
+1. Prerequisites
+
+Rust toolchain
+
+Solana CLI
+
+Anchor CLI
+
+Node.js and npm
+
+Docker (for Redis used by the relayer)
+
+2. Build the program and generate IDL
 git clone https://github.com/psolprotocol/psol-v1.git
 cd psol-v1
 
 solana config set --url devnet
-cargo build-sbf
-3. Deploy to devnet (fixed program ID)
-bash
-Copy code
+
+# Clean and build
+cargo clean
+anchor build
+
+
+This produces:
+
+target/deploy/psol_privacy.so
+
+target/idl/psol_privacy.json
+
+Update Anchor.toml and the README Program ID with the id you want to use.
+
+3. Deploy to devnet
+# Use the same program id configured in Anchor.toml
 solana program deploy target/deploy/psol_privacy.so \
-  --program-id Ddokrq1M6hT9Vu63k4JWqVRSecyLeotNf8xKknKfRwvZ
-After deployment, verify on Solana Explorer using the link above.
+  --program-id <DEVNET_PROGRAM_ID>
 
-4. Initialize pool (Anchor client example)
-ts
-Copy code
-await program.methods.initializePool(depth, rootHistorySize).accounts({
-  poolConfig,
-  merkleTree,
-  verificationKey,
-  vault,
-  tokenMint,
-  authority,
-  tokenProgram,
-  systemProgram,
-  rent,
-}).rpc();
-5. Set verification key
-ts
-Copy code
-await program.methods.setVerificationKey(
-  vkAlphaG1,
-  vkBetaG2,
-  vkGammaG2,
-  vkDeltaG2,
-  vkIc,
-).accounts({
-  poolConfig,
-  verificationKey,
-  authority,
-}).rpc();
-6. Deposit (off-chain Poseidon, on-chain insert)
-Off-chain (example only):
 
-ts
-Copy code
-const poseidon = require("circomlib").poseidon;
+Verify deployment on Solana Explorer with the devnet link above.
 
-const secret = crypto.randomBytes(32);
-const nullifierPreimage = crypto.randomBytes(32);
+SDK usage (local)
+cd psol-sdk
+npm install
+npm run build
 
-const commitment = poseidon([secret, nullifierPreimage, amount]);
-// Save (secret, nullifierPreimage, leafIndex) securely off-chain
-On-chain:
 
-ts
-Copy code
-await program.methods.deposit(amount, commitment).accounts({
-  poolConfig,
-  merkleTree,
-  vault,
-  userTokenAccount,
-  user,
-  tokenProgram,
-}).rpc();
-7. Withdraw (Groth16 proof)
-Off-chain, generate proof with snarkjs or equivalent:
+Typical flow from a dApp:
 
-ts
-Copy code
-const proof = await generateWithdrawalProof({
-  secret,
-  nullifierPreimage,
-  merklePath,
-  merkleRoot,
-  recipient,
-  amount,
-  relayer,
-  relayerFee,
-});
-On-chain:
+Create a note with secret and nullifier preimage.
 
-ts
-Copy code
-await program.methods.withdraw(
-  proof,
-  merkleRoot,
-  nullifierHash,
-  recipient,
-  amount,
-  relayer,
-  relayerFee,
-).accounts({
-  poolConfig,
-  merkleTree,
-  verificationKey,
-  spentNullifier,
-  vault,
-  recipientTokenAccount,
-  relayerTokenAccount,
-  withdrawer,
-  tokenProgram,
-  systemProgram,
-}).rpc();
-Note: This repository contains the on-chain program only. Valid proofs require circuits and proving/verifying keys that match the public input layout described in MIGRATION_GUIDE.md.
+Compute Poseidon commitment off-chain.
 
-Account Model
-Account	PDA Seeds	Purpose
-PoolConfig	["pool", token_mint]	Pool configuration and owner
-MerkleTree	["merkle_tree", pool_config]	Commitment storage + roots
-VerificationKey	["verification_key", pool_config]	Groth16 verification key
-SpentNullifier	["nullifier", pool_config, nullifier]	Double-spend prevention
-Vault	["vault", pool_config]	Token custody account
+Call the Anchor program to deposit into the pool.
 
-Adjust seeds above if the on-chain definitions change; the Rust state modules are the source of truth.
+Use the SDK to build Merkle paths and Groth16 proofs for transfers and withdrawals.
 
-Circuit Compatibility
-Hash Functions
-Purpose	Function	Location
-Commitment	Poseidon(secret, nullifier, amount)	Off-chain
-Nullifier	Poseidon(nullifier, secret)	Off-chain
-Merkle parent	`Keccak256(left	
+Submit withdrawals either directly or via the relayer.
 
-Poseidon Parameters
-Curve: BN254
+See psol-sdk/examples/ for a sample deposit/withdraw script targeting devnet.
 
-Field: Scalar field (Fr)
+Relayer service (devnet)
 
-Parameters: Standard circomlib Poseidon over BN254 (Fr)
+The relayer runs as a separate service that:
 
-Circuits and client-side hashing must match these parameters and the ordering described in MIGRATION_GUIDE.md.
+Accepts withdrawal requests over HTTP with a zk proof and withdrawal parameters.
 
-Security Model
-Privacy – deposits, transfers, and withdrawals are unlinkable at the protocol level if used correctly.
+Validates Merkle root and nullifier state.
 
-Soundness – users cannot withdraw more value than they deposited; value conservation is enforced by the circuit and Groth16 verification.
+Optionally verifies proofs off-chain (when VK JSON is provided).
 
-No double-spend – nullifiers are enforced via PDAs; reused nullifiers are rejected.
+Submits transactions from its own wallet.
 
-Fail-closed – malformed proofs, invalid VKs, or inconsistent inputs cause instruction failure.
+Tracks job status in Redis and exposes health/metrics endpoints.
 
-Roadmap (high level)
-Phase 1 – Prototype (basic deposit / withdraw PoC)
+Run locally
+cd services/psol-relayer
 
-Phase 2 – Security skeleton (state models, Anchor structure)
+# Start Redis
+docker compose up -d redis
 
-Phase 2.5 – Cryptographic wiring (Groth16, Poseidon, Merkle tree)
+# Install dependencies and start relayer
+npm install
+npm run dev
 
-Phase 3 – Core privacy protocol (current devnet deployment)
 
-Phase 4 – Security hardening, tests, audit preparation
+Health check:
 
-Phase 5 – SDK, example dApps, and mainnet deployment
+curl http://localhost:3000/health
+
+
+Protected endpoints require an API key configured via environment variables (see services/psol-relayer/README.md).
+
+High-level roadmap
+
+Phase 1: Prototype deposit / withdraw
+
+Phase 2: Anchor program structure and state model
+
+Phase 3: Full privacy protocol (deposits, transfers, withdrawals)
+
+Phase 4: Security hardening, tests, relayer integration
+
+Phase 5: SDK, example flows, and preparation for audited mainnet deployment
 
 License
+
 MIT
