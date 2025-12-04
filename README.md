@@ -1,309 +1,350 @@
-# pSol Privacy Protocol
+pSol Privacy Protocol
 
-A privacy-preserving token pool for Solana using zero-knowledge proofs. Inspired by Tornado Cash, adapted for Solana's architecture.
+Zero-Knowledge Privacy Pool for Solana
 
-## Status
+pSol is a private transfer protocol for Solana.
+It provides confidential deposits and withdrawals using Merkle-based commitments, nullifiers, and zk-SNARK proofs.
+The protocol is fully non-custodial and operates as a smart contract deployed on Solana.
 
-**Current Phase:** Devnet Testing  
-**Program Deployed:** Yes (devnet only)  
-**Production Ready:** No
+This repository contains the on-chain program, the TypeScript SDK, client examples, and devnet deployment references.
 
-### What Works
+Repository Structure
+psol-v1/
+│
+├── programs/
+│   └── psol-privacy/          # Anchor-based on-chain program
+│
+├── psol-sdk/
+│   ├── src/
+│   │   ├── idl/               # Generated IDL (psol_privacy.json)
+│   │   ├── utils/             # Merkle helpers, encoding, parsing
+│   │   ├── client.ts          # High-level SDK interface
+│   │   └── index.ts
+│   └── package.json
+│
+├── services/
+│   ├── relayer/               # Relayer prototype (withdraw execution)
+│   └── prover/                # Stub for ZK prover integration
+│
+├── migrations/                # Future pool migrations
+│
+├── test/                      # JS/TS integration tests
+│
+├── Anchor.toml                # Anchor project config
+├── Cargo.toml                 # Rust workspace config
+├── README.md                  # You are here
+└── ...
 
-- Pool initialization
-- Token deposits with commitment tracking
-- Merkle tree state management (depth 20, 100 root history)
-- Nullifier-based double-spend prevention
-- Admin controls (pause/unpause, authority transfer)
-- Event emission for all operations
+Features
+1. Private Deposits
 
-### What Needs Work
+Users deposit SPL tokens into the pool.
+The program generates a commitment leaf and inserts it into the Merkle tree.
 
-- ZK proof verification is currently in test mode (bypassed)
-- Circuits need compilation and trusted setup
-- Verification key not yet loaded on-chain
-- Withdraw function untested (requires proof generation)
-- SDK incomplete (missing proof generation)
-- Relayer service not deployed
-- No professional security audit
+2. Shielded Withdrawals
 
-## Architecture
+Withdrawals require:
 
-### On-Chain Program (Rust/Anchor)
+Merkle proof of deposit
 
-Solana program implementing:
-- Deposit: Accept tokens and store commitment in Merkle tree
-- Withdraw: Verify ZK proof, check nullifier, transfer tokens
-- Merkle tree: Keccak256-based, 20 levels deep
-- Admin: Authority management, emergency pause
+ZK proof verifying ownership
 
-**Program ID (devnet):** `2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi`
+Nullifier to prevent double spending
 
-### SDK (TypeScript)
+3. Relayer Support
 
-Client library for:
-- Generating commitments and nullifiers
-- Building Merkle proofs
-- Proof generation (planned, not implemented)
-- Transaction construction
+Users may withdraw through a relayer that pays gas and receives a fee.
 
-### Relayer Service (Node.js)
+4. Pause / Unpause
 
-Backend service for:
-- Submitting withdrawals on behalf of users
-- Fee collection
-- Rate limiting
-- Job queue management
+Admin controls for emergency response.
 
-Not yet deployed.
+5. Authority Transfer
 
-### ZK Circuits (Circom)
+Two-phase authority rotation.
 
-Two circuit versions:
-- `withdraw.circom` - Poseidon-based Merkle tree
-- `withdraw_keccak.circom` - Keccak256-based (matches on-chain)
+Devnet Deployment
 
-Status: Written but not compiled. No trusted setup performed.
+Build and deployment were performed using Solana Playground (beta) due to environment compatibility and ZK workflows.
 
-## Deployment Info
+Program
+Component	Address
+Program ID	2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi
 
-**Network:** Solana Devnet  
-**Program:** 2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi  
-**Test Token:** 9cnm3fpXqBBUU8byYq8rZbeCbMxvCReh5LF6XSjqaaoJ  
-**Pool Config:** EmeSBaC18Arn626HjyvYicGjXzjg4cx1wA1jV91w1NFD
+Explorer:
+https://explorer.solana.com/address/2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi?cluster=devnet
 
-View on [Solana Explorer](https://explorer.solana.com/address/2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi?cluster=devnet)
+Test Pool Addresses
+Item	Address
+Token Mint	9cnm3fpXqBBUU8byYq8rZbeCbMxvCReh5LF6XSjqaaoJ
+Pool Config	EmeSBaC18Arn626HjyvYicGjXzjg4cx1wA1jV91w1NFD
+Merkle Tree	D1Fx4ts24q81dKc9UMAyDoXhT5b7nyFTBVccmCJWy85H
+Vault	82amuqkKZQUnMnaq2Z9dDotafYicCoAwtPLyYatgbS3B
+Verified Transactions
+Action	Link
+Pool Init	https://explorer.solana.com/tx/2yGycUqWK88apbA3ftoKpfUdm1d8gXjTbqzrAkKbK9W887CNJzfvMXYZJNFC4wVLPuFDbUgRoXHWTgYHK8epZFdJ?cluster=devnet
 
-## Tested Transactions
+First Deposit	https://explorer.solana.com/tx/3ruP1eDGR68QVkW44RsJSw6iuGBLN8GUDXPw2RduyT1sPjrWFHVp23MyTbKZUy6AMURsBGcqQzV73JTqE5drdwtk?cluster=devnet
+Current Status
+Feature	Status
+Deposits	Working
+Withdrawals	Pending ZK prover integration
+Relayer	Prototype only, not deployed
+Building and Deploying (Recommended Method)
 
-**Pool Initialization:**  
-https://explorer.solana.com/tx/2yGycUqWK88apbA3ftoKpfUdm1d8gXjTbqzrAkKbK9W887CNJzfvMXYZJNFC4wVLPuFDbUgRoXHWTgYHK8epZFdJ?cluster=devnet
+Anchor builds require very specific toolchains that break easily.
+The recommended flow is:
 
-**First Deposit:**  
-https://explorer.solana.com/tx/3ruP1eDGR68QVkW44RsJSw6iuGBLN8GUDXPw2RduyT1sPjrWFHVp23MyTbKZUy6AMURsBGcqQzV73JTqE5drdwtk?cluster=devnet
+Option A: Use Solana Playground (official recommendation)
 
-## Security
+This avoids local toolchain issues entirely.
 
-### Self-Audit Completed
+Upload program folder
 
-A comprehensive security review was conducted, identifying:
-- 2 critical issues (hash function alignment, missing ZK setup)
-- 3 high severity issues (2 fixed, 1 operational)
-- 4 medium severity issues
-- 5 low severity issues
+Build with Anchor 0.30 backend
 
-**Fixes Applied:**
-- H-1: Relayer address bug in transaction builder
-- H-2: MAX_RELAYER_FEE_BPS enforcement (10% cap)
+Deploy to Devnet
 
-See `SECURITY_AUDIT.md` for full details.
+Download IDL and .so file
 
-### Known Limitations
+Sync them into /psol-sdk/src/idl
 
-**Critical:**
-- ZK proof verification currently bypassed for testing
-- No trusted setup ceremony performed
-- Verification key not configured
+This is already proven to work for pSol.
 
-**Important:**
-- Root history size may be insufficient under heavy load
-- No deposit denomination enforcement (privacy leak)
-- No finalization delay on deposits (reorg risk)
+Option B: Docker Build (if experienced)
 
-### Required Before Mainnet
+Anchor CLI 0.30.1:
 
-1. Professional security audit (estimated $100-150k)
-2. Trusted setup ceremony with multiple participants
-3. Circuit compilation and verification key generation
-4. Full end-to-end testing with real proofs
-5. Relayer infrastructure deployment
-6. Comprehensive integration tests
-
-## Building
-
-Note: Due to Rust version requirements, building requires a compatible toolchain. The program was successfully built and deployed using Solana Playground.
-
-### Requirements
-
-- Rust 1.77+
-- Solana CLI 1.18+
-- Anchor CLI 0.30.1
-- Node.js 18+
-
-### Build Steps
-
-```bash
-# Install dependencies
-npm install
-
-# Build program (requires compatible Rust version)
 anchor build
 
-# Deploy to devnet
-anchor deploy --provider.cluster devnet
 
-# Run tests
-anchor test --provider.cluster devnet
-```
+This uses:
 
-**Note:** Building locally may encounter Rust version conflicts with Solana's BPF toolchain. Solana Playground provides a compatible environment.
+docker pull backpackapp/build:v0.30.1
 
-## Project Structure
 
-```
-psol-v1/
-├── programs/psol-privacy/     # Anchor program (Rust)
-│   ├── src/
-│   │   ├── instructions/      # Program instructions
-│   │   ├── state/            # Account structures
-│   │   ├── crypto/           # ZK verification
-│   │   └── lib.rs
-│   └── Cargo.toml
-├── psol-sdk/                  # TypeScript SDK
-│   ├── src/
-│   │   ├── client/           # Program client
-│   │   ├── crypto/           # Hashing, Merkle trees
-│   │   ├── types/            # Type definitions
-│   │   └── idl/              # Generated IDL
-│   └── package.json
-├── services/psol-relayer/     # Relayer service
-│   ├── src/
-│   │   ├── server.ts         # Express server
-│   │   ├── transaction.ts    # TX builder
-│   │   ├── queue.ts          # Job queue
-│   │   └── validation.ts     # Request validation
-│   └── package.json
-├── circuits/                  # ZK circuits
-│   ├── withdraw.circom
-│   └── withdraw_keccak.circom
-├── tests/                     # Integration tests
-└── scripts/                   # Build/deploy scripts
-```
+No Rust installation required.
 
-## Usage
+SDK Usage Example
 
-### Initialize Pool
+Basic deposit test:
 
-```typescript
-import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { pSolClient } from "./psol-sdk";
+import { Keypair, PublicKey, Connection } from "@solana/web3.js";
 
-const tx = await program.methods
-  .initializePool(20, 100)  // depth, root history size
-  .accounts({
-    poolConfig,
-    merkleTree,
-    verificationKey,
-    vault,
-    tokenMint,
-    authority: wallet.publicKey,
-    // ...
-  })
-  .rpc();
-```
+const PROGRAM_ID = new PublicKey("2uPHpGmCNoTk6mnzzuP3DGbVyMiDPrQYRxkYBHMxwhBi");
 
-### Deposit
+async function run() {
+  const connection = new Connection("https://api.devnet.solana.com");
+  const user = Keypair.generate();
 
-```typescript
-import { BN } from "@coral-xyz/anchor";
+  const client = await pSolClient({
+    connection,
+    wallet: user,
+    programId: PROGRAM_ID
+  });
 
-const commitment = generateCommitment(secret, nullifier);
+  const result = await client.deposit({
+    amount: 1_000_000,
+    commitment: crypto.randomBytes(32),
+  });
 
-const tx = await program.methods
-  .deposit(new BN(amount), commitment)
-  .accounts({
-    poolConfig,
-    merkleTree,
-    vault,
-    depositorTokenAccount,
-    depositor: wallet.publicKey,
-    // ...
-  })
-  .rpc();
-```
+  console.log("Deposit signature:", result);
+}
 
-### Withdraw
+run();
 
-Not yet functional. Requires:
-1. Proof generation from circuit
-2. Verification key loaded on-chain
-3. Valid Merkle proof of commitment
+ZK / Merkle Architecture
+Commitment Tree
 
-## Roadmap
+Sparse Merkle tree
 
-### Phase 1: Core Implementation (Complete)
-- Anchor program structure
-- Basic deposit/withdraw logic
-- Merkle tree implementation
-- State management
+Default depth: 20
 
-### Phase 2: Security Hardening (Complete)
-- Self security audit
-- Bug fixes
-- Error handling
-- Event system
+History window: 100 roots
 
-### Phase 3: ZK Integration (In Progress)
-- Circuit compilation
-- Trusted setup
-- Verification key configuration
-- Proof generation in SDK
+Stored as PDA: ["merkle_tree", pool_config]
 
-### Phase 4: Production Preparation (Not Started)
-- Professional security audit
-- Relayer deployment
-- Comprehensive testing
-- Documentation
+Verification Key
 
-### Phase 5: Mainnet (Not Started)
-- Final audit review
-- Mainnet deployment
-- Monitoring setup
-- Bug bounty program
+Groth16 keypair stored as PDA
 
-## Dependencies
+set_verification_key loads vk into PDA
 
-### On-Chain
-- `anchor-lang` 0.30.1
-- `anchor-spl` 0.30.1
-- `solana-program` 1.18
+lock_verification_key freezes vk permanently
 
-### SDK
-- `@coral-xyz/anchor` ^0.30.1
-- `@solana/web3.js` ^1.95.0
-- `@solana/spl-token` ^0.4.0
+Withdrawal Proof
 
-### Relayer
-- `express` ^4.18.0
-- `ioredis` ^5.3.0
-- `@solana/web3.js` ^1.95.0
+Proof inputs:
 
-## Contributing
+Merkle root
 
-This project is in early development. Contributions welcome but expect breaking changes.
+Nullifier hash
 
-### Development Setup
+Recipient
 
-1. Clone repository
-2. Install dependencies: `npm install`
-3. Build program (see Building section)
-4. Run tests: `anchor test`
+Amount
 
-## License
+Relayer address
+
+Relayer fee
+
+Program validations:
+
+Nullifier has not been spent
+
+Root is valid in history
+
+Proof is valid
+
+Vault has enough balance
+
+Relayer Architecture (WIP)
+
+The relayer:
+
+Submits withdrawal on behalf of user
+
+Takes a fee
+
+Prevents deanonymization
+
+Optionally verifies proofs off-chain before forwarding
+
+Folder services/relayer contains the initial implementation.
+
+Roadmap
+
+v1.0 Completed
+
+Core logic
+
+Deposits
+
+Merkle tree insertion
+
+Config PDAs
+
+Devnet deployment
+
+SDK basic tests
+
+v1.1 Next
+
+Withdraw (ZK circuits)
+
+Prover service
+
+Relayer deployment
+
+Monitoring dashboard
+
+Enhanced audit logs
+
+v2.0
+
+Multi-token support
+
+Multiple pools
+
+Shielded accounts
+
+Private swaps
+
+Contributing
+
+Contributors must install:
+
+Node.js 18+
+
+Anchor CLI 0.30.1 (recommended: Docker mode)
+
+Solana CLI 1.18.x
+
+Lint:
+
+npm run lint
+
+
+Test:
+
+npm run test
+
+
+Current Limitations and Remaining Work (Grant Scope)
+
+pSol is deployed on devnet and the core logic is functional (pool creation, deposits, Merkle tree updates, SDK, relayer implementation).
+The remaining components require specialized ZK engineering effort and security review.
+
+1. Zero Knowledge Circuits (Not yet implemented)
+
+The withdrawal circuit is not complete. The following elements still need to be delivered:
+
+Circom circuit for membership proof and nullifier enforcement
+
+Poseidon hashing inside circuit
+
+Public inputs: root, nullifier hash, recipient, relayer, relayer fee
+
+Witness generation pipeline
+
+Trusted setup (Powers of Tau)
+
+ZKey and WASM artifacts
+
+On-chain verification key compression
+
+2. Withdrawal Flow
+
+The full ZK withdrawal path is not live. Required steps:
+
+Generate proof using final circuits
+
+Verify proof inside worker
+
+Submit anchored withdrawal instruction
+
+End to end devnet test of deposit → proof → withdrawal
+
+3. Relayer Hardening
+
+Relayer works, but not production-ready.
+
+Needed:
+
+Multi-relayer support
+
+Fee market
+
+Job receipts
+
+Censorship resistance
+
+Rate limiting tuning
+
+Better monitoring
+
+4. Security Review
+
+Required before mainnet:
+
+Formal audit of Anchor program
+
+Independent ZK circuit audit
+
+Review of relayer infrastructure
+
+Deterministic CI pipeline
+
+5. Performance Tuning
+
+Compute budget optimization
+
+Handling large Merkle trees (depth 20–22)
+
+Reducing proof generation time
+
+
+License
 
 MIT
-
-## Disclaimer
-
-This software is experimental and unaudited. Do not use with real funds. No warranties provided.
-
-## Contact
-
-GitHub: https://github.com/psolprotocol/psol-v1  
-X/Twitter: https://x.com/psolprotocol
-
----
-
-**Last Updated:** December 2024  
-**Program Version:** 1.0.0  
-**Status:** Development/Testing

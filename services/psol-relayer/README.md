@@ -1,387 +1,268 @@
-# pSol Relayer - Privacy-Preserving Withdrawal Service
+pSol Relayer
 
-A hardened, mainnet-ready relayer service for the pSol Privacy Pool protocol.
+A hardened withdrawal relayer for the pSol privacy pool.
+It submits withdrawals on behalf of users so their identity and wallet activity stay unlinkable on-chain.
 
-## Overview
+Purpose
 
-The relayer enables private withdrawals by:
-1. Accepting ZK proof submissions from users
-2. Validating proofs locally (optional) and on-chain
-3. Submitting withdrawal transactions on behalf of users
-4. Charging a small fee for the service
+A withdrawal without a relayer leaks privacy because users must pay gas from the withdrawing wallet.
+This relayer solves that by:
 
-**Without a relayer, privacy is broken:** Users would pay gas from their withdrawal address, linking deposits to withdrawals on-chain.
+Receiving user ZK proofs
 
-## Architecture
+Verifying the proof and merkle root
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Client Request                           │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Nginx (Rate Limiting)                       │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Express API Server                         │
-│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
-│  │   Auth MW    │  Rate Limit  │  Validation  │   Metrics    │ │
-│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    BullMQ Job Queue                             │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    Redis Persistence                      │  │
-│  │   - Job Store (survives restarts)                        │  │
-│  │   - Rate Limit Counters                                  │  │
-│  │   - Nullifier Deduplication                              │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Worker Process                               │
-│  1. Validate proof (snarkjs)                                   │
-│  2. Check nullifier not spent                                  │
-│  3. Verify merkle root                                         │
-│  4. Build and submit transaction                               │
-│  5. Wait for confirmation                                      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Solana RPC                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+Checking the nullifier is unused
 
-## Quick Start
+Preparing and submitting the withdrawal transaction
 
-### Prerequisites
+Charging a configurable fee
 
-- Node.js 18+
-- Redis 6+
-- Solana CLI (for key generation)
+The relayer never learns secrets. It only receives already-generated proofs.
 
-### 1. Clone and Install
+Architecture
+Client → Nginx → Express API → BullMQ → Redis → Worker → Solana RPC
 
-```bash
+
+Key components:
+
+Express API: public endpoints, optional API key auth
+
+BullMQ + Redis: queue for job processing and persistence
+
+Worker: proof verification, nullifier checks, transaction execution
+
+Nginx (optional): TLS termination and rate limiting
+
+Setup
+Requirements
+
+Node.js 18 or newer
+
+Redis 6 or newer
+
+Solana CLI for keypair creation
+
+A dedicated relayer wallet
+
+1. Install
 git clone <repo>
-cd relayer
+cd services/psol-relayer
 npm install
-```
 
-### 2. Generate Relayer Keypair
-
-```bash
-# Generate a new keypair (hot wallet - use limited funds!)
+2. Create relayer wallet
 solana-keygen new --no-bip39-passphrase -o relayer-keypair.json
 
-# Get base58 private key
+
+Convert to base58:
+
 cat relayer-keypair.json | node -e "
-  const fs = require('fs');
-  const bs58 = require('bs58');
-  const data = JSON.parse(fs.readFileSync('/dev/stdin', 'utf-8'));
-  console.log(bs58.encode(Buffer.from(data)));
+  const fs=require('fs');
+  const bs58=require('bs58');
+  const k=JSON.parse(fs.readFileSync(0,'utf8'));
+  console.log(bs58.encode(Buffer.from(k)));
 "
-```
 
-### 3. Configure Environment
 
-```bash
+Set this value in .env.
+
+3. Configure environment
 cp .env.example .env
-# Edit .env with your settings
-```
 
-**Minimum required:**
-- `SOLANA_RPC_URL` - Your RPC endpoint
-- `PSOL_PROGRAM_ID` - pSol program address
-- `RELAYER_PRIVATE_KEY` - Base58 encoded keypair
 
-### 4. Fund Relayer Wallet
+Minimum required:
 
-```bash
-# Devnet
-solana airdrop 2 <RELAYER_ADDRESS> --url devnet
+SOLANA_RPC_URL=...
+PSOL_PROGRAM_ID=...
+RELAYER_PRIVATE_KEY=...
 
-# Mainnet - Transfer SOL to relayer address
-```
+4. Fund the relayer wallet
 
-### 5. Start Services
+Devnet:
 
-```bash
-# Development
+solana airdrop 2 RELAYER_ADDRESS --url devnet
+
+
+Mainnet: transfer SOL manually.
+
+5. Start
+
+Development:
+
 npm run dev
 
-# Production
+
+Production:
+
 npm run build
 npm start
 
-# Docker
+
+Docker:
+
 docker-compose up -d
-```
 
-## API Reference
-
-### Health & Info
-
-```
+API
+Health
 GET /health
-```
-Returns relayer health status, balance, and Redis connectivity.
 
-```
+
+Connectivity, balance, redis state.
+
+Info
 GET /info
-```
-Returns relayer address, fee configuration, and statistics.
 
-### Metrics
 
-```
-GET /metrics
-GET /metrics?format=prometheus
-```
-Returns metrics in JSON or Prometheus format.
+Address, fee settings, and configuration.
 
-### Fee Quote
-
-```
+Fee quote
 POST /fee/quote
-Content-Type: application/json
-
 {
   "poolAddress": "...",
   "amount": "1000000000"
 }
-```
 
-### Submit Withdrawal
-
-```
+Submit withdrawal
 POST /withdraw
 Authorization: Bearer <API_KEY>
-Content-Type: application/json
-
 {
   "poolAddress": "...",
   "tokenMint": "...",
-  "proofData": "...",        // Hex encoded
-  "merkleRoot": "...",       // 64 hex chars
-  "nullifierHash": "...",    // 64 hex chars
+  "proofData": "...",
+  "merkleRoot": "...",
+  "nullifierHash": "...",
   "recipient": "...",
   "amount": "...",
   "relayerFee": "..."
 }
-```
 
-Response:
-```json
-{
-  "success": true,
-  "data": {
-    "jobId": "...",
-    "status": "queued",
-    "estimatedTime": 30
-  },
-  "meta": {
-    "requestId": "...",
-    "timestamp": 1234567890
-  }
-}
-```
 
-### Check Job Status
+Returns a queued job ID.
 
-```
+Job status
 GET /withdraw/:jobId
-```
 
-Response:
-```json
-{
-  "success": true,
-  "data": {
-    "jobId": "...",
-    "status": "succeeded",
-    "txSignature": "...",
-    "createdAt": 1234567890,
-    "updatedAt": 1234567890
-  }
-}
-```
 
-### Validate Nullifier
+Returns pending, processing, succeeded, or failed, plus transaction signature if complete.
 
-```
+Nullifier validation
 POST /validate/nullifier
-Content-Type: application/json
-
 {
   "poolAddress": "...",
   "nullifierHash": "..."
 }
-```
 
-## Configuration Reference
+Environment variables
+Variable	Required	Description
+SOLANA_RPC_URL	yes	RPC endpoint
+PSOL_PROGRAM_ID	yes	Program ID
+RELAYER_PRIVATE_KEY	yes	Relayer hot wallet
+REDIS_HOST	no	Default: localhost
+BASE_FEE_BPS	no	Default: 50 (0.5 percent)
+REQUIRE_AUTH_FOR_WRITE	no	Enforce API key
+RELAYER_API_KEYS	no	Comma-separated keys
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `SOLANA_RPC_URL` | Yes | - | Solana RPC endpoint |
-| `PSOL_PROGRAM_ID` | Yes | - | pSol program address |
-| `RELAYER_PRIVATE_KEY` | Yes | - | Base58 encoded keypair |
-| `REDIS_HOST` | No | localhost | Redis host |
-| `BASE_FEE_BPS` | No | 50 | Fee in basis points (0.5%) |
-| `REQUIRE_AUTH_FOR_WRITE` | No | false | Require API key for POST |
-| `RELAYER_API_KEYS` | No | - | Comma-separated API keys |
+See .env.example for complete list.
 
-See `.env.example` for full configuration options.
+Security
+Before mainnet
 
-## Security Checklist
+Use a dedicated hot wallet
 
-### Before Mainnet Deployment
+Store keys in a secrets manager
 
-- [ ] **Generate dedicated hot wallet** - Don't use your main wallet
-- [ ] **Use secrets manager** - Never commit `RELAYER_PRIVATE_KEY` to git
-- [ ] **Configure API keys** - Set `REQUIRE_AUTH_FOR_WRITE=true`
-- [ ] **Set IP allowlist** - If only serving your own frontend
-- [ ] **Enable TLS** - Use Nginx with SSL certificates
-- [ ] **Configure alerts** - Monitor balance and error rates
-- [ ] **Test on devnet first** - Verify everything works
-- [ ] **Review rate limits** - Tune for expected traffic
+Enforce API key auth
 
-### Sensitive Data Handling
+Run behind Nginx or Cloudflare
 
-The relayer is designed to protect privacy:
+Enable TLS
 
-- **Proof data is never logged** - Only truncated nullifier hashes
-- **Private keys are loaded once** - Never printed or serialized
-- **Client IPs are hashed** - In production logs
-- **API keys are compared timing-safe** - Prevents timing attacks
+Restrict allowed origins
 
-### Network Security
+Protect Redis (password + private network)
 
-1. **Firewall rules:**
-   - Only expose ports 80/443 (through Nginx)
-   - Block direct access to port 3000
-   - Allow Redis only from local network
+Monitor balance and error rates
 
-2. **Redis security:**
-   - Set a password (`REDIS_PASSWORD`)
-   - Bind to localhost or Docker network only
-   - Enable persistence for job data
+Test everything on devnet
 
-## Production Deployment
+What is never logged
 
-### Docker Compose
+Proof data
 
-```bash
-# Start all services
+Private keys
+
+Full nullifiers
+
+Client IPs (only hashed in production mode)
+
+Deployment
+Docker
 docker-compose up -d
 
-# With Nginx (requires TLS certs)
-docker-compose --profile production up -d
 
-# Scale relayer workers
+Scale workers:
+
 docker-compose up -d --scale relayer=3
-```
 
-### TLS Certificates
+TLS
 
-```bash
-# Create certs directory
-mkdir -p certs
+Use real certificates in production.
 
-# Option 1: Let's Encrypt (recommended)
-certbot certonly --standalone -d relayer.yourdomain.com
-cp /etc/letsencrypt/live/relayer.yourdomain.com/fullchain.pem certs/
-cp /etc/letsencrypt/live/relayer.yourdomain.com/privkey.pem certs/
+Example self-signed for testing:
 
-# Option 2: Self-signed (testing only)
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout certs/privkey.pem -out certs/fullchain.pem
-```
+-keyout certs/privkey.pem -out certs/fullchain.pem
 
-### Monitoring
+Monitoring
 
-1. **Health checks:**
-   ```bash
-   curl http://localhost:3000/health
-   ```
+Health:
 
-2. **Prometheus metrics:**
-   ```bash
-   curl http://localhost:3000/metrics?format=prometheus
-   ```
+curl http://localhost:3000/health
 
-3. **Key metrics to monitor:**
-   - `psol_relayer_jobs_failed_total` - Failure rate
-   - `psol_relayer_relayer_balance_sol` - Balance alerts
-   - `psol_relayer_pending_jobs` - Queue depth
-   - `psol_relayer_processing_time_p95_ms` - Latency
 
-## Troubleshooting
+Prometheus metrics:
 
-### Common Issues
+curl http://localhost:3000/metrics?format=prometheus
 
-**"Redis connection error"**
-- Check Redis is running: `redis-cli ping`
-- Verify `REDIS_HOST` and `REDIS_PORT`
 
-**"Relayer balance below minimum"**
-- Fund the relayer wallet with SOL
-- Check balance: `solana balance <ADDRESS>`
+Key metrics:
 
-**"Invalid API key"**
-- API keys must be 32+ characters
-- Check `RELAYER_API_KEYS` format (comma-separated)
+worker failure rate
 
-**"Nullifier already spent"**
-- The deposit has already been withdrawn
-- Check on-chain state
+relayer wallet balance
 
-**"Rate limited"**
-- Wait and retry after `Retry-After` header
-- Or configure higher limits
+job queue depth
 
-### Logs
+transaction confirmation latency
 
-```bash
-# Docker logs
+Troubleshooting
+
+Redis errors
+Check Redis is running and reachable.
+
+Low balance
+Fund the relayer address and monitor regularly.
+
+Nullifier already spent
+Withdrawal already executed.
+
+Rate limited
+Respect Retry-After or adjust limits.
+
+Invalid API key
+Ensure correct comma-separated list in .env.
+
+Logs:
+
 docker-compose logs -f relayer
 
-# Log levels: trace, debug, info, warn, error
-LOG_LEVEL=debug npm run dev
-```
-
-## Development
-
-```bash
-# Install dependencies
+Development
 npm install
-
-# Run in development mode (hot reload)
 npm run dev
-
-# Build for production
 npm run build
-
-# Run tests
 npm test
-
-# Lint
 npm run lint
-```
 
-## License
+License
 
 MIT
-
-## Support
-
-- GitHub Issues: [link]
-- Discord: [link]
-- Documentation: [link]
