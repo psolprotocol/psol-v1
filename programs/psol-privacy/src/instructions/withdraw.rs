@@ -1,4 +1,4 @@
-//! Withdraw Instruction - Phase 4 Hardened
+//! Withdraw Instruction - Devnet Alpha Hardened
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
@@ -12,7 +12,7 @@ use crate::state::{
 };
 
 pub const MIN_WITHDRAWAL_AMOUNT: u64 = 1;
-pub const MAX_RELAYER_FEE_BPS: u64 = 1000;
+pub const MAX_RELAYER_FEE_BPS: u64 = 1000; // 10%
 
 #[derive(Accounts)]
 #[instruction(
@@ -101,49 +101,66 @@ pub fn handler(
     let verification_key = &ctx.accounts.verification_key;
     let spent_nullifier = &mut ctx.accounts.spent_nullifier;
 
+    // Basic state guards
     pool_config.require_not_paused()?;
     pool_config.require_vk_configured()?;
 
+    // Amount and fee sanity
     require!(amount >= MIN_WITHDRAWAL_AMOUNT, PrivacyError::InvalidAmount);
-    require!(relayer_fee <= amount, PrivacyError::RelayerFeeExceedsAmount);
-    
+    require!(
+        relayer_fee <= amount,
+        PrivacyError::RelayerFeeExceedsAmount
+    );
+
     // Enforce maximum relayer fee (10% = 1000 basis points)
     let max_fee = amount
         .checked_mul(MAX_RELAYER_FEE_BPS)
-        .and_then(|v| v.checked_div(10000))
+        .and_then(|v| v.checked_div(10_000))
         .ok_or(error!(PrivacyError::ArithmeticOverflow))?;
-    require!(relayer_fee <= max_fee, PrivacyError::RelayerFeeExceedsAmount);
-    
-    require!(ctx.accounts.vault.amount >= amount, PrivacyError::InsufficientBalance);
-    require!(merkle_tree.is_known_root(&merkle_root), PrivacyError::InvalidMerkleRoot);
-    require!(nullifier_hash != [0u8; 32], PrivacyError::InvalidNullifier);
-
-    let public_inputs = ZkPublicInputs::new(
-        merkle_root,
-        nullifier_hash,
-        recipient,
-        amount,
-        relayer,
-        relayer_fee,
+    require!(
+        relayer_fee <= max_fee,
+        PrivacyError::RelayerFeeExceedsAmount
     );
+
+    // Vault and tree checks
+    require!(
+        ctx.accounts.vault.amount >= amount,
+        PrivacyError::InsufficientBalance
+    );
+    require!(
+        merkle_tree.is_known_root(&merkle_root),
+        PrivacyError::InvalidMerkleRoot
+    );
+    require!(
+        nullifier_hash != [0u8; 32],
+        PrivacyError::InvalidNullifier
+    );
+
+    // Public inputs and ZK verification
+    let public_inputs =
+        ZkPublicInputs::new(merkle_root, nullifier_hash, recipient, amount, relayer, relayer_fee);
     public_inputs.validate()?;
 
     let vk: VerificationKey = VerificationKey::from(verification_key.as_ref());
     let proof_valid = verify_groth16_proof(&proof_data, &vk, &public_inputs)?;
     require!(proof_valid, PrivacyError::InvalidProof);
 
+    // Nullifier marking
+    let clock = Clock::get()?;
     spent_nullifier.initialize(
         pool_config.key(),
         nullifier_hash,
-        Clock::get()?.unix_timestamp,
-        Clock::get()?.slot,
+        clock.unix_timestamp,
+        clock.slot,
         ctx.bumps.spent_nullifier,
     );
 
+    // Compute net amount after relayer fee
     let net_amount = amount
         .checked_sub(relayer_fee)
         .ok_or(error!(PrivacyError::ArithmeticOverflow))?;
 
+    // PDA signer seeds
     let pool_seeds = &[
         b"pool".as_ref(),
         pool_config.token_mint.as_ref(),
@@ -151,10 +168,14 @@ pub fn handler(
     ];
     let signer_seeds = &[&pool_seeds[..]];
 
+    // Transfer to recipient
     if net_amount > 0 {
         let cpi_accounts = Transfer {
             from: ctx.accounts.vault.to_account_info(),
-            to: ctx.accounts.recipient_token_account.to_account_info(),
+            to: ctx
+                .accounts
+                .recipient_token_account
+                .to_account_info(),
             authority: pool_config.to_account_info(),
         };
         let cpi_ctx = CpiContext::new_with_signer(
@@ -165,6 +186,7 @@ pub fn handler(
         token::transfer(cpi_ctx, net_amount)?;
     }
 
+    // Transfer relayer fee
     if relayer_fee > 0 {
         let cpi_accounts = Transfer {
             from: ctx.accounts.vault.to_account_info(),
@@ -179,8 +201,10 @@ pub fn handler(
         token::transfer(cpi_ctx, relayer_fee)?;
     }
 
+    // Update pool stats (gross amount for accounting)
     pool_config.record_withdrawal(amount)?;
 
+    // Emit event (net amount to user is usually what consumers care about)
     emit!(WithdrawEvent {
         pool: pool_config.key(),
         nullifier_hash,
@@ -188,7 +212,7 @@ pub fn handler(
         amount: net_amount,
         relayer,
         relayer_fee,
-        timestamp: Clock::get()?.unix_timestamp,
+        timestamp: clock.unix_timestamp,
     });
 
     msg!("Withdrawal successful");

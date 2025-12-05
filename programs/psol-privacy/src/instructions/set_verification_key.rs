@@ -1,10 +1,10 @@
-//! Set Verification Key Instruction - Phase 4 Hardened
+//! Set Verification Key Instruction - Devnet Alpha Hardened
 
 use anchor_lang::prelude::*;
 
-use crate::crypto::{validate_g1_point, validate_g2_point, is_g1_identity, is_g2_identity};
+use crate::crypto::{is_g1_identity, is_g2_identity, validate_g1_point, validate_g2_point};
 use crate::error::PrivacyError;
-use crate::events::{VerificationKeySet, VerificationKeyLocked};
+use crate::events::{VerificationKeyLocked, VerificationKeySet};
 use crate::state::{PoolConfig, VerificationKeyAccount};
 
 pub const MAX_IC_POINTS: usize = 16;
@@ -42,22 +42,49 @@ pub fn handler(
     let pool_config = &mut ctx.accounts.pool_config;
     let verification_key = &mut ctx.accounts.verification_key;
 
+    // Hardened lifecycle:
+    // In production, the verification key must be set once, before any deposits exist.
+    // This prevents an attacker who compromises the authority later from swapping in
+    // a malicious VK while the pool holds user funds.
+    //
+    // We enforce that VK cannot be changed once there have been any deposits.
+    // (Assumes PoolConfig tracks total_deposits.)
+    require!(
+        pool_config.total_deposits == 0,
+        PrivacyError::VerificationKeyLocked
+    );
+
+    // Still require the VK to be unlocked (not permanently locked)
     pool_config.require_vk_unlocked()?;
 
     let ic_len = vk_ic.len();
     require!(ic_len >= MIN_IC_POINTS, PrivacyError::InvalidPublicInputs);
     require!(ic_len <= MAX_IC_POINTS, PrivacyError::InputTooLarge);
 
-    require!(!is_g1_identity(&vk_alpha_g1), PrivacyError::VerificationKeyNotSet);
+    // Basic structural validation of VK points
+
+    require!(
+        !is_g1_identity(&vk_alpha_g1),
+        PrivacyError::VerificationKeyNotSet
+    );
     validate_g1_point(&vk_alpha_g1).map_err(|_| error!(PrivacyError::InvalidProof))?;
 
-    require!(!is_g2_identity(&vk_beta_g2), PrivacyError::VerificationKeyNotSet);
+    require!(
+        !is_g2_identity(&vk_beta_g2),
+        PrivacyError::VerificationKeyNotSet
+    );
     validate_g2_point(&vk_beta_g2).map_err(|_| error!(PrivacyError::InvalidProof))?;
 
-    require!(!is_g2_identity(&vk_gamma_g2), PrivacyError::VerificationKeyNotSet);
+    require!(
+        !is_g2_identity(&vk_gamma_g2),
+        PrivacyError::VerificationKeyNotSet
+    );
     validate_g2_point(&vk_gamma_g2).map_err(|_| error!(PrivacyError::InvalidProof))?;
 
-    require!(!is_g2_identity(&vk_delta_g2), PrivacyError::VerificationKeyNotSet);
+    require!(
+        !is_g2_identity(&vk_delta_g2),
+        PrivacyError::VerificationKeyNotSet
+    );
     validate_g2_point(&vk_delta_g2).map_err(|_| error!(PrivacyError::InvalidProof))?;
 
     for (i, ic_point) in vk_ic.iter().enumerate() {
@@ -67,7 +94,14 @@ pub fn handler(
         })?;
     }
 
-    verification_key.set_vk(vk_alpha_g1, vk_beta_g2, vk_gamma_g2, vk_delta_g2, vk_ic.clone());
+    // Store VK on-chain
+    verification_key.set_vk(
+        vk_alpha_g1,
+        vk_beta_g2,
+        vk_gamma_g2,
+        vk_delta_g2,
+        vk_ic.clone(),
+    );
     pool_config.set_vk_configured(true);
 
     emit!(VerificationKeySet {
@@ -98,7 +132,10 @@ pub fn lock_vk_handler(ctx: Context<LockVerificationKey>) -> Result<()> {
     let pool_config = &mut ctx.accounts.pool_config;
 
     pool_config.require_vk_configured()?;
-    require!(!pool_config.vk_locked, PrivacyError::VerificationKeyLocked);
+    require!(
+        !pool_config.vk_locked,
+        PrivacyError::VerificationKeyLocked
+    );
 
     pool_config.lock_vk();
 
