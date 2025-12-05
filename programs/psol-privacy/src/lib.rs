@@ -38,7 +38,12 @@ pub mod psol_privacy {
         vk_ic: Vec<[u8; 64]>,
     ) -> Result<()> {
         instructions::set_verification_key::handler(
-            ctx, vk_alpha_g1, vk_beta_g2, vk_gamma_g2, vk_delta_g2, vk_ic,
+            ctx,
+            vk_alpha_g1,
+            vk_beta_g2,
+            vk_gamma_g2,
+            vk_delta_g2,
+            vk_ic,
         )
     }
 
@@ -66,18 +71,29 @@ pub mod psol_privacy {
         relayer_fee: u64,
     ) -> Result<()> {
         instructions::withdraw::handler(
-            ctx, proof_data, merkle_root, nullifier_hash,
-            recipient, amount, relayer, relayer_fee,
+            ctx,
+            proof_data,
+            merkle_root,
+            nullifier_hash,
+            recipient,
+            amount,
+            relayer,
+            relayer_fee,
         )
     }
 
+    #[deprecated(note = "private_transfer is not implemented in pSOL v1 and is a placeholder for a future version.")]
     pub fn private_transfer(
         ctx: Context<PrivateTransfer>,
         _input_nullifiers: Vec<[u8; 32]>,
         _output_commitments: Vec<[u8; 32]>,
         _proof_data: Vec<u8>,
     ) -> Result<()> {
-        instructions::private_transfer::handler(ctx)
+        // The underlying handler is also deprecated and always returns NotImplemented.
+        #[allow(deprecated)]
+        {
+            instructions::private_transfer::handler(ctx)
+        }
     }
 
     pub fn pause_pool(ctx: Context<PausePool>) -> Result<()> {
