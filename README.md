@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> Status: Devnet-only, unaudited, work in progress.
+> Current capabilities: deposit + WIP withdraw, prototype relayer.
+> Not production-ready. Do not use with real funds.
+
 pSol Privacy Protocol
 
 Zero-Knowledge Privacy Pool for Solana

@@ -1,3 +1,7 @@
+> [!NOTE]
+> This document is an internal, AI-generated pre-audit checklist.
+> It is **not** a formal third-party security audit or assurance.
+
 # pSOL Privacy Pool - Security Audit Report
 
 **Date:** December 2024  

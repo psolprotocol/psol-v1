@@ -1,3 +1,7 @@
+> [!NOTE]
+> This file describes internal audit preparation steps.
+> It is **not** a formal audit report or assurance statement.
+
 # pSol Privacy Pool - Audit Preparation Document
 
 **Version:** Phase 4  

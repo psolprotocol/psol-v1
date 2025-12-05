@@ -1,4 +1,4 @@
-//! pSol Privacy Pool - Phase 4 (Audit-Ready)
+//! pSol Privacy Pool - Devnet Alpha (Research Prototype)
 //!
 //! A privacy-preserving token pool for Solana using zero-knowledge proofs.
 
