@@ -19,7 +19,7 @@ pub const MAX_TREE_DEPTH: u8 = 24;
 pub const MIN_TREE_DEPTH: u8 = 4;
 
 /// Minimum root history size
-pub const MIN_ROOT_HISTORY_SIZE: u16 = 30;
+pub const MIN_ROOT_HISTORY_SIZE: u16 = 200;
 
 /// Incremental Merkle tree state account.
 ///

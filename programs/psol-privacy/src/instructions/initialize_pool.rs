@@ -9,7 +9,7 @@ use crate::state::{MerkleTree, PoolConfig, VerificationKeyAccount};
 
 pub const MIN_TREE_DEPTH: u8 = 4;
 pub const MAX_TREE_DEPTH: u8 = 24;
-pub const MIN_ROOT_HISTORY: u16 = 30;
+pub const MIN_ROOT_HISTORY: u16 = 200;
 pub const MAX_ROOT_HISTORY: u16 = 1000;
 
 #[derive(Accounts)]
