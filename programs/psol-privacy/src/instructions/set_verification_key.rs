@@ -2,7 +2,7 @@
 
 use anchor_lang::prelude::*;
 
-use crate::crypto::{is_g1_identity, is_g2_identity, validate_g1_point, validate_g2_point};
+use crate::crypto::{is_g1_identity, is_g2_identity, public_inputs::ZkPublicInputs, validate_g1_point, validate_g2_point};
 use crate::error::PrivacyError;
 use crate::events::{VerificationKeyLocked, VerificationKeySet};
 use crate::state::{PoolConfig, VerificationKeyAccount};
@@ -60,6 +60,10 @@ pub fn handler(
     let ic_len = vk_ic.len();
     require!(ic_len >= MIN_IC_POINTS, PrivacyError::InvalidPublicInputs);
     require!(ic_len <= MAX_IC_POINTS, PrivacyError::InputTooLarge);
+    require!(
+        ic_len == ZkPublicInputs::COUNT + 1,
+        PrivacyError::InvalidPublicInputs
+    );
 
     // Basic structural validation of VK points
 

@@ -54,6 +54,7 @@ pub fn handler(ctx: Context<Deposit>, amount: u64, commitment: [u8; 32]) -> Resu
     let merkle_tree = &mut ctx.accounts.merkle_tree;
 
     pool_config.require_not_paused()?;
+    pool_config.require_vk_configured()?;
 
     require!(amount > 0, PrivacyError::InvalidAmount);
     require!(amount <= MAX_DEPOSIT_AMOUNT, PrivacyError::LimitExceeded);

@@ -75,6 +75,7 @@ pub struct Withdraw<'info> {
     #[account(
         mut,
         constraint = relayer_token_account.mint == pool_config.token_mint @ PrivacyError::InvalidMint,
+        constraint = relayer_token_account.owner == relayer @ PrivacyError::Unauthorized,
     )]
     pub relayer_token_account: Account<'info, TokenAccount>,
 
